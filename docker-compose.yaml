@@ -1,0 +1,82 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7
+    container_name: redis
+    ports:
+      - '${REDIS_PORT:-6379}:6379'
+    restart: unless-stopped
+    command: >
+      redis-server --save "" --appendonly no --maxmemory 256mb --maxmemory-policy allkeys-lru --requirepass ${REDIS_PASSWORD:-redispass}
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "3"
+
+  emqx:
+    image: emqx:5.7.0
+    container_name: emqx
+    ports:
+      - '${EMQX_MQTT_PORT:-1883}:1883'
+      - '${EMQX_DASHBOARD_PORT:-18083}:18083'
+    environment:
+      - "EMQX_DASHBOARD__BOOTSTRAP_USER_LIST=[{\"username\":\"admin\",\"password\":\"public\"}]"
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+
+  influxdb:
+    image: influxdb:3-core
+    container_name: influxdb
+    ports:
+      - '8086:8086'
+    environment:
+      - INFLUXD_INITIAL_ORG=${INFLUX_ORG:-manufacturing}
+      - INFLUXD_INITIAL_DATABASE=${INFLUX_DATABASE:-energy_monitoring}
+      - INFLUXD_INITIAL_ADMIN_TOKEN=${INFLUX_TOKEN:-my-super-secret-admin-token-12345}
+    volumes:
+      - influxdb_data:/var/lib/influxdb
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+
+  nodered:
+    image: nodered/node-red
+    container_name: nodered
+    ports:
+      - '${NODE_RED_PORT:-1880}:1880'
+    volumes:
+      - nodered_data:/data
+    depends_on:
+      - emqx
+    restart: unless-stopped
+
+  aggregator:
+    build:
+      context: ./aggregator
+      dockerfile: Dockerfile
+    container_name: energy_aggregator
+    depends_on:
+      - redis
+      - influxdb
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-redispass}
+      - REDIS_HOST=${REDIS_HOST:-redis}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+      - INFLUX_HOST=${INFLUX_HOST:-http://influxdb:8086}
+      - INFLUX_TOKEN=${INFLUX_TOKEN:-my-super-secret-admin-token-12345}
+      - INFLUX_ORG=${INFLUX_ORG:-manufacturing}
+      - INFLUX_DATABASE=${INFLUX_DATABASE:-energy_monitoring}
+    restart: unless-stopped
+
+volumes:
+  influxdb_data:
+  nodered_data:

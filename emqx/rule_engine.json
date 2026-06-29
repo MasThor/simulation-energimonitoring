@@ -1,0 +1,18 @@
+{
+  "comment": "This file is a template and guide to configure EMQX 5.x Rule Engine to forward raw MQTT energy data into InfluxDB v3.",
+  "rule": {
+    "sql": "SELECT\n  payload.machine_id as machine_id,\n  payload.location as location,\n  payload.timestamp as timestamp,\n  payload.power_kw as power_kw,\n  payload.energy_kwh as energy_kwh,\n  payload.voltage_v as voltage_v,\n  payload.current_a as current_a,\n  payload.power_factor as power_factor\nFROM\n  \"factory/+/+/energy\"",
+    "description": "Rule to parse manufacturing energy data and route to InfluxDB v3"
+  },
+  "data_bridge": {
+    "type": "http",
+    "name": "influxdb_v3_http_sink",
+    "method": "POST",
+    "url": "http://influxdb:8086/api/v2/write?org=manufacturing&bucket=energy_monitoring&precision=ms",
+    "headers": {
+      "Authorization": "Token my-super-secret-admin-token-12345",
+      "Content-Type": "text/plain; charset=utf-8"
+    },
+    "body_template": "energy_raw,machine_id=${machine_id},location=${location} power_kw=${power_kw},energy_kwh=${energy_kwh},voltage_v=${voltage_v},current_a=${current_a},power_factor=${power_factor} ${timestamp}"
+  }
+}

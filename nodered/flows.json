@@ -1,0 +1,117 @@
+[
+    {
+        "id": "energy_sim_tab",
+        "type": "tab",
+        "label": "Energy Simulator",
+        "disabled": false,
+        "info": "Simulates manufacturing machine energy usage parameters and publishes them to EMQX MQTT Broker."
+    },
+    {
+        "id": "inject_10s",
+        "type": "inject",
+        "z": "energy_sim_tab",
+        "name": "Every 10 seconds",
+        "props": [
+            {
+                "p": "payload"
+            }
+        ],
+        "repeat": "10",
+        "crontab": "",
+        "once": true,
+        "onceDelay": 0.1,
+        "topic": "",
+        "payloadType": "date",
+        "x": 170,
+        "y": 140,
+        "wires": [
+            [
+                "gen_data_node"
+            ]
+        ]
+    },
+    {
+        "id": "gen_data_node",
+        "type": "function",
+        "z": "energy_sim_tab",
+        "name": "Generate Machine Data",
+        "func": "// Initialize persistent energy counters in context if not exist\nlet energy1 = context.get('energy1') || 1000.0;\nlet energy2 = context.get('energy2') || 2500.0;\n\n// Simulate power variations (kW)\nconst power1 = parseFloat((10 + Math.random() * 5).toFixed(2));\nconst power2 = parseFloat((30 + Math.random() * 15).toFixed(2));\n\n// Increment energy (kWh) = power * 10 seconds / 3600\nenergy1 += (power1 * 10) / 3600;\nenergy2 += (power2 * 10) / 3600;\n\n// Save back to context\ncontext.set('energy1', energy1);\ncontext.set('energy2', energy2);\n\nconst msg1 = {\n    topic: \"factory/line_a/machine_001/energy\",\n    payload: {\n        machine_id: \"machine_001\",\n        location: \"line_a\",\n        timestamp: Date.now(),\n        power_kw: power1,\n        energy_kwh: parseFloat(energy1.toFixed(3)),\n        voltage_v: parseFloat((220 + (Math.random() - 0.5) * 4).toFixed(1)),\n        current_a: parseFloat((power1 * 1000 / 220 / 0.95).toFixed(2)),\n        power_factor: parseFloat((0.92 + Math.random() * 0.06).toFixed(2))\n    }\n};\n\nconst msg2 = {\n    topic: \"factory/line_a/machine_002/energy\",\n    payload: {\n        machine_id: \"machine_002\",\n        location: \"line_a\",\n        timestamp: Date.now(),\n        power_kw: power2,\n        energy_kwh: parseFloat(energy2.toFixed(3)),\n        voltage_v: parseFloat((220 + (Math.random() - 0.5) * 4).toFixed(1)),\n        current_a: parseFloat((power2 * 1000 / 220 / 0.95).toFixed(2)),\n        power_factor: parseFloat((0.91 + Math.random() * 0.07).toFixed(2))\n    }\n};\n\nreturn [[msg1, msg2]];",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 410,
+        "y": 140,
+        "wires": [
+            [
+                "mqtt_out_node",
+                "debug_node"
+            ]
+        ]
+    },
+    {
+        "id": "mqtt_out_node",
+        "type": "mqtt out",
+        "z": "energy_sim_tab",
+        "name": "Publish to EMQX",
+        "topic": "",
+        "qos": "1",
+        "retain": "false",
+        "respTopic": "",
+        "contentType": "",
+        "userProps": "",
+        "correl": "",
+        "expiry": "",
+        "broker": "emqx_broker_config",
+        "x": 670,
+        "y": 120,
+        "wires": []
+    },
+    {
+        "id": "debug_node",
+        "type": "debug",
+        "z": "energy_sim_tab",
+        "name": "Debug Output",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "payload",
+        "targetType": "msg",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 660,
+        "y": 180,
+        "wires": []
+    },
+    {
+        "id": "emqx_broker_config",
+        "type": "mqtt-broker",
+        "name": "EMQX Local",
+        "broker": "emqx",
+        "port": "1883",
+        "clientid": "nodered-simulator",
+        "autoConnect": true,
+        "usetls": false,
+        "compatmode": false,
+        "protocolVersion": "4",
+        "keepalive": "60",
+        "cleansession": true,
+        "birthTopic": "",
+        "birthQos": "0",
+        "birthPayload": "",
+        "birthMsg": {},
+        "closeTopic": "",
+        "closeQos": "0",
+        "closePayload": "",
+        "closeMsg": {},
+        "willTopic": "",
+        "willQos": "0",
+        "willPayload": "",
+        "willMsg": {},
+        "userProps": "",
+        "sessionExpiry": ""
+    }
+]
