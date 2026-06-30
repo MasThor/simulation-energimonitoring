@@ -1,25 +1,39 @@
 [
     {
-        "id": "migration-tab",
+        "id": "tab-migration",
         "type": "tab",
         "label": "Migration / Seeders",
         "disabled": false,
-        "info": "Initializes and checks InfluxDB v3 databases/buckets."
+        "info": "Tab 1: Create DBs + Tables + Seed historical data. Runs once on startup."
     },
     {
-        "id": "energy-monitor-tab",
+        "id": "tab-simulator",
         "type": "tab",
-        "label": "Energy Monitor",
+        "label": "Simulator",
         "disabled": false,
-        "info": "Simulates energy raw data generation and handles aggregation (Raw -> Minute, Minute -> Hour)."
+        "info": "Tab 2: Generate 5-machine telemetry every 10s, publish to EMQX MQTT."
     },
     {
-        "id": "emqx-broker-config",
+        "id": "tab-ingestion",
+        "type": "tab",
+        "label": "Ingestion",
+        "disabled": false,
+        "info": "Tab 3: Subscribe MQTT energy/+/data -> validate -> write RAW to InfluxDB."
+    },
+    {
+        "id": "tab-dashboard",
+        "type": "tab",
+        "label": "Dashboard Output",
+        "disabled": false,
+        "info": "Tab 4: Query 3 DBs -> JSON API at GET /api/dashboard/energy"
+    },
+    {
+        "id": "cfg-emqx",
         "type": "mqtt-broker",
         "name": "EMQX Broker",
         "broker": "emqx",
         "port": "1883",
-        "clientid": "nodered-energy-publisher",
+        "clientid": "nodered-energy",
         "autoConnect": true,
         "usetls": false,
         "protocolVersion": "5",
@@ -37,495 +51,553 @@
         "willPayload": ""
     },
     {
-        "id": "db-init-trigger",
+        "id": "mig-trigger",
         "type": "inject",
-        "z": "migration-tab",
-        "name": "Startup (1s delay)",
+        "z": "tab-migration",
+        "name": "Startup / Manual Trigger",
         "props": [
             {
                 "p": "payload"
-            },
-            {
-                "p": "topic",
-                "vt": "str"
             }
         ],
         "repeat": "",
         "crontab": "",
         "once": true,
-        "onceDelay": "1",
+        "onceDelay": 1.5,
         "topic": "",
-        "payload": "",
-        "payloadType": "date",
-        "x": 140,
-        "y": 120,
+        "payload": "start",
+        "payloadType": "str",
+        "x": 160,
+        "y": 80,
         "wires": [
             [
-                "db-check-prepare"
+                "mig-fn-init"
             ]
         ]
     },
     {
-        "id": "db-check-prepare",
+        "id": "mig-cmt-1",
+        "type": "comment",
+        "z": "tab-migration",
+        "name": "[1] POST /api/v3/configure/database — Create 3 databases",
+        "info": "",
+        "x": 500,
+        "y": 80,
+        "wires": []
+    },
+    {
+        "id": "mig-fn-init",
         "type": "function",
-        "z": "migration-tab",
-        "name": "Prepare Check DB",
-        "func": "const token = env.get(\"INFLUX_TOKEN\") || \"my-super-secret-admin-token-ChangeMe-12345\";\nconst rawDb = env.get(\"INFLUX_DATABASE\") || \"energy_monitoring\";\n\n// We want to verify and seed three databases:\nconst databases = [\n    { name: rawDb, retention: 0 },\n    { name: \"energy_minutes\", retention: 1209600 }, // 14 days in seconds\n    { name: \"energy_hour\", retention: 0 }           // permanent\n];\n\n// Send 3 separate messages to the next HTTP request node\nconst msgs = databases.map(db => {\n    return {\n        dbName: db.name,\n        retention: db.retention,\n        headers: {\n            \"Authorization\": \"Token \" + token\n        }\n    };\n});\n\nreturn [ msgs ];",
+        "z": "tab-migration",
+        "name": "[1] Init Migration",
+        "func": "// [1] Init: define databases and tables, use InfluxDB v3 native API\nconst HOST  = 'http://influxdb:8181';\nconst TOKEN = 'apiv3_ds_pESsacfI0_vXWdSHp49SZaXPbODKnd8gaSQopgUOV-ijAiLEeqLy3IiyXhp0bQtGmN1pHOHS83CJfKWqP7w';\nconst databases = [\n  { db: 'energy_monitoring', retention_period: null,  label: 'RAW (permanent)' },\n  { db: 'energy_minutes',    retention_period: '14d', label: 'MINUTES (14d)' },\n  { db: 'energy_hour',       retention_period: null,  label: 'HOURLY (permanent)' }\n];\nconst tables = [\n  { db: 'energy_monitoring', table: 'energy_raw',    tags: ['machine_id','location'] },\n  { db: 'energy_minutes',    table: 'energy_minute', tags: ['machine_id','location'] },\n  { db: 'energy_hour',       table: 'energy_hour',   tags: ['machine_id','location'] }\n];\nflow.set('mig_host', HOST);\nflow.set('mig_token', TOKEN);\nflow.set('mig_databases', databases);\nflow.set('mig_tables', tables);\nflow.set('mig_db_idx', 0);\nflow.set('mig_tbl_idx', 0);\nnode.status({ fill: 'blue', shape: 'dot', text: 'Starting...' });\nmsg.payload = 'start';\nreturn msg;",
         "outputs": 1,
-        "noerr": 0,
-        "initialize": "",
-        "finalize": "",
-        "libs": [],
-        "x": 350,
+        "x": 500,
         "y": 120,
         "wires": [
             [
-                "db-check-http"
+                "mig-fn-next-db"
             ]
         ]
     },
     {
-        "id": "db-check-http",
-        "type": "http request",
-        "z": "migration-tab",
-        "name": "GET Buckets",
-        "method": "GET",
-        "ret": "obj",
-        "paytoqs": "ignore",
-        "url": "http://influxdb:8181/api/v2/buckets",
-        "tls": "",
-        "persist": false,
-        "proxy": "",
-        "authType": "",
-        "x": 550,
-        "y": 120,
-        "wires": [
-            [
-                "db-check-evaluate"
-            ]
-        ]
-    },
-    {
-        "id": "db-check-evaluate",
+        "id": "mig-fn-next-db",
         "type": "function",
-        "z": "migration-tab",
-        "name": "Evaluate & Create DB",
-        "func": "const token = env.get(\"INFLUX_TOKEN\") || \"my-super-secret-admin-token-ChangeMe-12345\";\n\nconst buckets = msg.payload.buckets || [];\nconst dbExists = buckets.some(b => b.name === msg.dbName);\n\nif (dbExists) {\n    node.status({ fill: \"green\", shape: \"dot\", text: `${msg.dbName} exists ✓` });\n    node.log(`Database '${msg.dbName}' already exists.`);\n    return null; // Stop this message\n}\n\nnode.status({ fill: \"yellow\", shape: \"ring\", text: `Creating ${msg.dbName}...` });\n\n// Prepare create request\nmsg.url = \"http://influxdb:8181/api/v2/buckets\";\nmsg.headers = {\n    \"Authorization\": \"Token \" + token,\n    \"Content-Type\": \"application/json\"\n};\nmsg.payload = {\n    \"name\": msg.dbName\n};\nif (msg.retention > 0) {\n    msg.payload.retentionRules = [\n        {\n            \"type\": \"expire\",\n            \"everySeconds\": msg.retention\n        }\n    ];\n} else {\n    msg.payload.retentionRules = [];\n}\nreturn msg;",
-        "outputs": 1,
-        "noerr": 0,
-        "initialize": "",
-        "finalize": "",
-        "libs": [],
-        "x": 770,
+        "z": "tab-migration",
+        "name": "[1] Next DB",
+        "func": "// [1] Loop: POST /api/v3/configure/database\nconst databases = flow.get('mig_databases') || [];\nconst idx = flow.get('mig_db_idx') || 0;\nif (idx >= databases.length) {\n  node.status({ fill: 'green', shape: 'dot', text: idx + ' DBs created' });\n  return [null, msg];\n}\nconst db = databases[idx];\nconst body = { db: db.db };\nif (db.retention_period) body.retention_period = db.retention_period;\nmsg.url     = flow.get('mig_host') + '/api/v3/configure/database';\nmsg.method  = 'POST';\nmsg.headers = { 'Authorization': 'Bearer ' + flow.get('mig_token'), 'Content-Type': 'application/json' };\nmsg.payload = JSON.stringify(body);\nmsg._label  = db.label;\nmsg._idx    = idx;\nnode.status({ fill: 'blue', shape: 'ring', text: 'DB: ' + db.db });\nreturn [msg, null];",
+        "outputs": 2,
+        "x": 740,
         "y": 120,
         "wires": [
             [
-                "db-create-http"
+                "mig-http-db"
+            ],
+            [
+                "mig-fn-next-tbl"
             ]
         ]
     },
     {
-        "id": "db-create-http",
+        "id": "mig-http-db",
         "type": "http request",
-        "z": "migration-tab",
-        "name": "POST Create DB",
-        "method": "POST",
+        "z": "tab-migration",
+        "name": "[1] POST /api/v3/configure/database",
+        "method": "use",
         "ret": "txt",
         "paytoqs": "ignore",
         "url": "",
         "tls": "",
         "persist": false,
-        "proxy": "",
-        "authType": "",
-        "x": 980,
+        "x": 1000,
         "y": 120,
         "wires": [
             [
-                "db-migration-debug"
+                "mig-fn-db-result"
             ]
         ]
     },
     {
-        "id": "db-migration-debug",
-        "type": "debug",
-        "z": "migration-tab",
-        "name": "Migration Debug",
-        "active": true,
-        "tosidebar": true,
-        "console": false,
-        "tostatus": false,
-        "complete": "true",
-        "targetType": "full",
-        "statusVal": "",
-        "statusType": "auto",
-        "x": 1180,
-        "y": 120,
+        "id": "mig-fn-db-result",
+        "type": "function",
+        "z": "tab-migration",
+        "name": "[1] Advance DB Index",
+        "func": "const code = msg.statusCode;\nif (code === 200 || code === 201) {\n  node.log('[mig] DB created: ' + msg._label);\n} else if (code === 409 || code === 422) {\n  node.log('[mig] DB exists: ' + msg._label + ' (OK)');\n} else {\n  node.warn('[mig] DB status ' + code + ': ' + msg.payload);\n}\nflow.set('mig_db_idx', (msg._idx || 0) + 1);\nreturn msg;",
+        "outputs": 1,
+        "x": 1000,
+        "y": 180,
+        "wires": [
+            [
+                "mig-fn-next-db"
+            ]
+        ]
+    },
+    {
+        "id": "mig-cmt-2",
+        "type": "comment",
+        "z": "tab-migration",
+        "name": "[2] POST /api/v3/configure/table — Create 3 tables with tags",
+        "info": "",
+        "x": 740,
+        "y": 240,
         "wires": []
     },
     {
-        "id": "inject-ticker",
+        "id": "mig-fn-next-tbl",
+        "type": "function",
+        "z": "tab-migration",
+        "name": "[2] Next Table",
+        "func": "// [2] Loop: POST /api/v3/configure/table\nconst tables = flow.get('mig_tables') || [];\nconst idx = flow.get('mig_tbl_idx') || 0;\nif (idx >= tables.length) {\n  node.status({ fill: 'green', shape: 'dot', text: idx + ' tables created' });\n  return [null, msg];\n}\nconst t = tables[idx];\nmsg.url     = flow.get('mig_host') + '/api/v3/configure/table';\nmsg.method  = 'POST';\nmsg.headers = { 'Authorization': 'Bearer ' + flow.get('mig_token'), 'Content-Type': 'application/json' };\nmsg.payload = JSON.stringify({ db: t.db, table: t.table, tags: t.tags });\nmsg._tbl    = t.db + '.' + t.table;\nmsg._tidx   = idx;\nnode.status({ fill: 'blue', shape: 'ring', text: 'Table: ' + t.table });\nreturn [msg, null];",
+        "outputs": 2,
+        "x": 740,
+        "y": 280,
+        "wires": [
+            [
+                "mig-http-tbl"
+            ],
+            [
+                "mig-fn-seed-raw"
+            ]
+        ]
+    },
+    {
+        "id": "mig-http-tbl",
+        "type": "http request",
+        "z": "tab-migration",
+        "name": "[2] POST /api/v3/configure/table",
+        "method": "use",
+        "ret": "txt",
+        "paytoqs": "ignore",
+        "url": "",
+        "tls": "",
+        "persist": false,
+        "x": 1000,
+        "y": 280,
+        "wires": [
+            [
+                "mig-fn-tbl-result"
+            ]
+        ]
+    },
+    {
+        "id": "mig-fn-tbl-result",
+        "type": "function",
+        "z": "tab-migration",
+        "name": "[2] Advance Table Index",
+        "func": "const code = msg.statusCode;\nif (code === 200 || code === 201) {\n  node.log('[mig] Table created: ' + msg._tbl);\n} else if (code === 409 || code === 422) {\n  node.log('[mig] Table exists: ' + msg._tbl + ' (OK)');\n} else {\n  node.warn('[mig] Table status ' + code + ' for ' + msg._tbl + ': ' + msg.payload);\n}\nflow.set('mig_tbl_idx', (msg._tidx || 0) + 1);\nreturn msg;",
+        "outputs": 1,
+        "x": 1000,
+        "y": 340,
+        "wires": [
+            [
+                "mig-fn-next-tbl"
+            ]
+        ]
+    },
+    {
+        "id": "mig-cmt-3",
+        "type": "comment",
+        "z": "tab-migration",
+        "name": "[3] POST /api/v3/write_lp?db=energy_monitoring — Seed RAW 24h",
+        "info": "",
+        "x": 500,
+        "y": 420,
+        "wires": []
+    },
+    {
+        "id": "mig-fn-seed-raw",
+        "type": "function",
+        "z": "tab-migration",
+        "name": "[3] Generate RAW Seed (24h × 5 mesin × 10s)",
+        "func": "// [3] Seed RAW: POST /api/v3/write_lp?db=energy_monitoring\nconst HOST  = flow.get('mig_host');\nconst TOKEN = flow.get('mig_token');\nconst machines = [{\"id\": \"machine_01\", \"location\": \"produksi_a\", \"basePower\": 12, \"baseVoltage\": 220, \"baseCurrent\": 55}, {\"id\": \"machine_02\", \"location\": \"produksi_a\", \"basePower\": 10, \"baseVoltage\": 218, \"baseCurrent\": 46}, {\"id\": \"machine_03\", \"location\": \"produksi_b\", \"basePower\": 22, \"baseVoltage\": 221, \"baseCurrent\": 100}, {\"id\": \"machine_04\", \"location\": \"gudang\", \"basePower\": 4, \"baseVoltage\": 219, \"baseCurrent\": 18}, {\"id\": \"machine_05\", \"location\": \"office\", \"basePower\": 3, \"baseVoltage\": 220, \"baseCurrent\": 14}];\nconst INTERVAL_SEC = 10, LOOKBACK_HOURS = 24, BATCH_SIZE = 500;\nconst now = Date.now(), startMs = now - (LOOKBACK_HOURS * 3600 * 1000);\nconst vary  = (base, pct) => base * (1 + (Math.random() - 0.5) * 2 * pct);\nconst round = (v, d)      => Math.round(v * Math.pow(10, d)) / Math.pow(10, d);\nlet lines = [], batches = [];\nconst flush = () => {\n  if (!lines.length) return;\n  batches.push({ url: HOST + '/api/v3/write_lp?db=energy_monitoring', body: lines.join('\\n') });\n  lines = [];\n};\nfor (let ts = startMs; ts < now; ts += INTERVAL_SEC * 1000) {\n  const tsNs = (ts * 1000000).toString();\n  for (const m of machines) {\n    const power   = round(vary(m.basePower,   0.20), 3);\n    const voltage = round(vary(m.baseVoltage, 0.02), 1);\n    const current = round(vary(m.baseCurrent, 0.15), 2);\n    const pf      = round(0.85 + Math.random() * 0.12, 3);\n    const energy  = round(power * INTERVAL_SEC / 3600, 6);\n    lines.push('energy_raw,machine_id=' + m.id + ',location=' + m.location +\n      ' power_kw=' + power + ',voltage_v=' + voltage + ',current_a=' + current +\n      ',energy_kwh=' + energy + ',power_factor=' + pf + ' ' + tsNs);\n    if (lines.length >= BATCH_SIZE) flush();\n  }\n}\nflush();\nflow.set('seed_raw_batches', batches);\nflow.set('seed_raw_idx', 0);\nnode.status({ fill: 'blue', shape: 'dot', text: 'RAW: ' + batches.length + ' batches' });\nmsg.payload = { totalBatches: batches.length };\nreturn msg;",
+        "outputs": 1,
+        "x": 500,
+        "y": 460,
+        "wires": [
+            [
+                "mig-fn-next-raw"
+            ]
+        ]
+    },
+    {
+        "id": "mig-fn-next-raw",
+        "type": "function",
+        "z": "tab-migration",
+        "name": "[3] Next RAW Batch",
+        "func": "const batches = flow.get('seed_raw_batches') || [];\nconst idx = flow.get('seed_raw_idx') || 0;\nif (idx >= batches.length) {\n  node.status({ fill: 'green', shape: 'dot', text: 'RAW done: ' + batches.length });\n  return [null, msg];\n}\nconst b = batches[idx];\nflow.set('seed_raw_idx', idx + 1);\nmsg.url     = b.url;\nmsg.method  = 'POST';\nmsg.headers = { 'Authorization': 'Bearer ' + flow.get('mig_token'), 'Content-Type': 'text/plain' };\nmsg.payload = b.body;\nnode.status({ fill: 'blue', shape: 'ring', text: 'RAW batch ' + (idx+1) + '/' + batches.length });\nreturn [msg, null];",
+        "outputs": 2,
+        "x": 740,
+        "y": 460,
+        "wires": [
+            [
+                "mig-http-raw"
+            ],
+            [
+                "mig-fn-seed-min"
+            ]
+        ]
+    },
+    {
+        "id": "mig-http-raw",
+        "type": "http request",
+        "z": "tab-migration",
+        "name": "[3] POST /api/v3/write_lp RAW",
+        "method": "use",
+        "ret": "txt",
+        "paytoqs": "ignore",
+        "url": "",
+        "tls": "",
+        "persist": false,
+        "x": 1000,
+        "y": 460,
+        "wires": [
+            [
+                "mig-fn-after-raw"
+            ]
+        ]
+    },
+    {
+        "id": "mig-fn-after-raw",
+        "type": "function",
+        "z": "tab-migration",
+        "name": "[3] Advance RAW Index",
+        "func": "if(msg.statusCode!==200&&msg.statusCode!==204){node.warn('[seed-raw] '+msg.statusCode+': '+msg.payload);} return msg;",
+        "outputs": 1,
+        "x": 1000,
+        "y": 520,
+        "wires": [
+            [
+                "mig-fn-next-raw"
+            ]
+        ]
+    },
+    {
+        "id": "mig-cmt-4",
+        "type": "comment",
+        "z": "tab-migration",
+        "name": "[4] POST /api/v3/write_lp?db=energy_minutes — Seed MINUTES 24h",
+        "info": "",
+        "x": 500,
+        "y": 600,
+        "wires": []
+    },
+    {
+        "id": "mig-fn-seed-min",
+        "type": "function",
+        "z": "tab-migration",
+        "name": "[4] Generate MINUTES Seed (24h × 5 mesin × 1m)",
+        "func": "// [4] Seed MINUTES: POST /api/v3/write_lp?db=energy_minutes\nconst HOST  = flow.get('mig_host');\nconst TOKEN = flow.get('mig_token');\nconst machines = [{\"id\": \"machine_01\", \"location\": \"produksi_a\", \"basePower\": 12, \"baseVoltage\": 220, \"baseCurrent\": 55}, {\"id\": \"machine_02\", \"location\": \"produksi_a\", \"basePower\": 10, \"baseVoltage\": 218, \"baseCurrent\": 46}, {\"id\": \"machine_03\", \"location\": \"produksi_b\", \"basePower\": 22, \"baseVoltage\": 221, \"baseCurrent\": 100}, {\"id\": \"machine_04\", \"location\": \"gudang\", \"basePower\": 4, \"baseVoltage\": 219, \"baseCurrent\": 18}, {\"id\": \"machine_05\", \"location\": \"office\", \"basePower\": 3, \"baseVoltage\": 220, \"baseCurrent\": 14}];\nconst LOOKBACK_HOURS = 24, BATCH_SIZE = 500;\nconst now = Date.now(), startMs = now - (LOOKBACK_HOURS * 3600 * 1000);\nconst vary  = (base, pct) => base * (1 + (Math.random() - 0.5) * 2 * pct);\nconst round = (v, d)      => Math.round(v * Math.pow(10, d)) / Math.pow(10, d);\nlet lines = [], batches = [];\nconst flush = () => {\n  if (!lines.length) return;\n  batches.push({ url: HOST + '/api/v3/write_lp?db=energy_minutes', body: lines.join('\\n') });\n  lines = [];\n};\nfor (let ts = startMs; ts < now; ts += 60 * 1000) {\n  const tsNs = (Math.floor(ts / 60000) * 60000 * 1000000).toString();\n  for (const m of machines) {\n    const avgPow = round(vary(m.basePower,   0.15), 3);\n    const sumE   = round(avgPow * 60 / 3600, 6);\n    const avgV   = round(vary(m.baseVoltage, 0.02), 1);\n    const avgA   = round(avgPow * 1000 / avgV, 2);\n    const avgPF  = round(0.87 + Math.random() * 0.10, 3);\n    const minPow = round(avgPow * 0.85, 3);\n    const maxPow = round(avgPow * 1.18, 3);\n    lines.push('energy_minute,machine_id=' + m.id + ',location=' + m.location +\n      ' avg_power_kw=' + avgPow + ',sum_energy_kwh=' + sumE +\n      ',avg_voltage_v=' + avgV + ',avg_current_a=' + avgA +\n      ',avg_power_factor=' + avgPF + ',min_power_kw=' + minPow +\n      ',max_power_kw=' + maxPow + ',sample_count=6i' + ' ' + tsNs);\n    if (lines.length >= BATCH_SIZE) flush();\n  }\n}\nflush();\nflow.set('seed_min_batches', batches);\nflow.set('seed_min_idx', 0);\nnode.status({ fill: 'blue', shape: 'dot', text: 'MINUTES: ' + batches.length + ' batches' });\nmsg.payload = { totalBatches: batches.length };\nreturn msg;",
+        "outputs": 1,
+        "x": 500,
+        "y": 640,
+        "wires": [
+            [
+                "mig-fn-next-min"
+            ]
+        ]
+    },
+    {
+        "id": "mig-fn-next-min",
+        "type": "function",
+        "z": "tab-migration",
+        "name": "[4] Next MINUTES Batch",
+        "func": "const batches = flow.get('seed_min_batches') || [];\nconst idx = flow.get('seed_min_idx') || 0;\nif (idx >= batches.length) {\n  node.status({ fill: 'green', shape: 'dot', text: 'MINUTES done: ' + batches.length });\n  return [null, msg];\n}\nconst b = batches[idx];\nflow.set('seed_min_idx', idx + 1);\nmsg.url     = b.url;\nmsg.method  = 'POST';\nmsg.headers = { 'Authorization': 'Bearer ' + flow.get('mig_token'), 'Content-Type': 'text/plain' };\nmsg.payload = b.body;\nnode.status({ fill: 'blue', shape: 'ring', text: 'MIN batch ' + (idx+1) + '/' + batches.length });\nreturn [msg, null];",
+        "outputs": 2,
+        "x": 740,
+        "y": 640,
+        "wires": [
+            [
+                "mig-http-min"
+            ],
+            [
+                "mig-fn-seed-hourly"
+            ]
+        ]
+    },
+    {
+        "id": "mig-http-min",
+        "type": "http request",
+        "z": "tab-migration",
+        "name": "[4] POST /api/v3/write_lp MINUTES",
+        "method": "use",
+        "ret": "txt",
+        "paytoqs": "ignore",
+        "url": "",
+        "tls": "",
+        "persist": false,
+        "x": 1000,
+        "y": 640,
+        "wires": [
+            [
+                "mig-fn-after-min"
+            ]
+        ]
+    },
+    {
+        "id": "mig-fn-after-min",
+        "type": "function",
+        "z": "tab-migration",
+        "name": "[4] Advance MINUTES Index",
+        "func": "if(msg.statusCode!==200&&msg.statusCode!==204){node.warn('[seed-min] '+msg.statusCode+': '+msg.payload);} return msg;",
+        "outputs": 1,
+        "x": 1000,
+        "y": 700,
+        "wires": [
+            [
+                "mig-fn-next-min"
+            ]
+        ]
+    },
+    {
+        "id": "mig-cmt-5",
+        "type": "comment",
+        "z": "tab-migration",
+        "name": "[5] POST /api/v3/write_lp?db=energy_hour — Seed HOURLY 24h",
+        "info": "",
+        "x": 500,
+        "y": 780,
+        "wires": []
+    },
+    {
+        "id": "mig-fn-seed-hourly",
+        "type": "function",
+        "z": "tab-migration",
+        "name": "[5] Generate HOURLY Seed (24h × 5 mesin)",
+        "func": "// [5] Seed HOURLY: POST /api/v3/write_lp?db=energy_hour\nconst HOST  = flow.get('mig_host');\nconst TOKEN = flow.get('mig_token');\nconst machines = [{\"id\": \"machine_01\", \"location\": \"produksi_a\", \"basePower\": 12, \"baseVoltage\": 220, \"baseCurrent\": 55}, {\"id\": \"machine_02\", \"location\": \"produksi_a\", \"basePower\": 10, \"baseVoltage\": 218, \"baseCurrent\": 46}, {\"id\": \"machine_03\", \"location\": \"produksi_b\", \"basePower\": 22, \"baseVoltage\": 221, \"baseCurrent\": 100}, {\"id\": \"machine_04\", \"location\": \"gudang\", \"basePower\": 4, \"baseVoltage\": 219, \"baseCurrent\": 18}, {\"id\": \"machine_05\", \"location\": \"office\", \"basePower\": 3, \"baseVoltage\": 220, \"baseCurrent\": 14}];\nconst LOOKBACK_HOURS = 24;\nconst now = Date.now(), startMs = now - (LOOKBACK_HOURS * 3600 * 1000);\nconst vary  = (base, pct) => base * (1 + (Math.random() - 0.5) * 2 * pct);\nconst round = (v, d)      => Math.round(v * Math.pow(10, d)) / Math.pow(10, d);\nlet lines = [];\nfor (let ts = startMs; ts < now; ts += 3600 * 1000) {\n  const tsNs = (Math.floor(ts / 3600000) * 3600000 * 1000000).toString();\n  for (const m of machines) {\n    const avgPow = round(vary(m.basePower,   0.12), 3);\n    const sumE   = round(avgPow * 1, 4);\n    const avgV   = round(vary(m.baseVoltage, 0.02), 1);\n    const avgA   = round(avgPow * 1000 / avgV, 2);\n    const avgPF  = round(0.88 + Math.random() * 0.09, 3);\n    const minPow = round(avgPow * 0.80, 3);\n    const maxPow = round(avgPow * 1.20, 3);\n    lines.push('energy_hour,machine_id=' + m.id + ',location=' + m.location +\n      ' avg_power_kw=' + avgPow + ',sum_energy_kwh=' + sumE +\n      ',avg_voltage_v=' + avgV + ',avg_current_a=' + avgA +\n      ',avg_power_factor=' + avgPF + ',min_power_kw=' + minPow +\n      ',max_power_kw=' + maxPow + ',sample_count=360i' + ' ' + tsNs);\n  }\n}\nmsg.url     = HOST + '/api/v3/write_lp?db=energy_hour';\nmsg.method  = 'POST';\nmsg.headers = { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'text/plain' };\nmsg.payload = lines.join('\\n');\nnode.status({ fill: 'blue', shape: 'dot', text: 'Writing ' + lines.length + ' HOURLY...' });\nreturn msg;",
+        "outputs": 1,
+        "x": 500,
+        "y": 820,
+        "wires": [
+            [
+                "mig-http-hourly"
+            ]
+        ]
+    },
+    {
+        "id": "mig-http-hourly",
+        "type": "http request",
+        "z": "tab-migration",
+        "name": "[5] POST /api/v3/write_lp HOURLY",
+        "method": "use",
+        "ret": "txt",
+        "paytoqs": "ignore",
+        "url": "",
+        "tls": "",
+        "persist": false,
+        "x": 760,
+        "y": 820,
+        "wires": [
+            [
+                "mig-fn-done"
+            ]
+        ]
+    },
+    {
+        "id": "mig-fn-done",
+        "type": "function",
+        "z": "tab-migration",
+        "name": "[5] Migration Complete",
+        "func": "const ok = msg.statusCode === 200 || msg.statusCode === 204;\nnode.status({ fill: 'green', shape: 'dot', text: ok ? 'All seeding done!' : 'Done (status ' + msg.statusCode + ')' });\nmsg.payload = { status: 'done', influx_code: msg.statusCode };\nreturn msg;",
+        "outputs": 1,
+        "x": 1000,
+        "y": 820,
+        "wires": [
+            [
+                "mig-debug"
+            ]
+        ]
+    },
+    {
+        "id": "mig-debug",
+        "type": "debug",
+        "z": "tab-migration",
+        "name": "Seeder Status",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": true,
+        "complete": "payload",
+        "targetType": "msg",
+        "x": 1220,
+        "y": 820,
+        "wires": []
+    },
+    {
+        "id": "mig-catch",
+        "type": "catch",
+        "z": "tab-migration",
+        "name": "Error Handler",
+        "scope": null,
+        "uncaught": false,
+        "x": 160,
+        "y": 940,
+        "wires": [
+            [
+                "mig-debug-err"
+            ]
+        ]
+    },
+    {
+        "id": "mig-debug-err",
+        "type": "debug",
+        "z": "tab-migration",
+        "name": "Error Log",
+        "active": true,
+        "tosidebar": true,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "x": 400,
+        "y": 940,
+        "wires": []
+    },
+    {
+        "id": "sim-trigger",
         "type": "inject",
-        "z": "energy-monitor-tab",
-        "name": "Every 10s",
+        "z": "tab-simulator",
+        "name": "[1] Interval 10s — Auto Start",
         "props": [
             {
                 "p": "payload"
-            },
-            {
-                "p": "topic",
-                "vt": "str"
             }
         ],
         "repeat": "10",
         "crontab": "",
         "once": true,
-        "onceDelay": 1,
+        "onceDelay": 2,
         "topic": "",
-        "payload": "",
-        "payloadType": "date",
-        "x": 110,
+        "payload": "tick",
+        "payloadType": "str",
+        "x": 180,
         "y": 100,
         "wires": [
             [
-                "build-payload"
+                "sim-fn-gen"
             ]
         ]
     },
     {
-        "id": "build-payload",
-        "type": "function",
-        "z": "energy-monitor-tab",
-        "name": "Build Energy & LP",
-        "func": "// Simulate energy data for multiple machines\nconst machines = [\n    { machine_id: 'machine_001', location: 'line_a' },\n    { machine_id: 'machine_002', location: 'line_a' },\n    { machine_id: 'machine_003', location: 'line_b' },\n];\n\nconst timestampNs = Date.now() * 1000000; // Nanosecond timestamp\nconst mqttMsgs = [];\nconst lpLines = [];\n\nmachines.forEach(m => {\n    const power_kw     = parseFloat((10 + Math.random() * 20).toFixed(3));\n    const energy_kwh   = parseFloat((context.get(m.machine_id + '_kwh') || 1000.0 + Math.random() * 0.03).toFixed(4));\n    const voltage_v    = parseFloat((219 + Math.random() * 3).toFixed(2));\n    const current_a    = parseFloat((power_kw * 1000 / (voltage_v * Math.sqrt(3)) ).toFixed(3));\n    const power_factor = parseFloat((0.92 + Math.random() * 0.06).toFixed(3));\n\n    // Accumulate energy (simulated meter reading)\n    context.set(m.machine_id + '_kwh', energy_kwh + power_kw / 360);\n\n    const payloadObj = {\n        machine_id:   m.machine_id,\n        location:     m.location,\n        timestamp:    Date.now(),\n        power_kw,\n        energy_kwh,\n        voltage_v,\n        current_a,\n        power_factor,\n    };\n\n    // MQTT Format\n    mqttMsgs.push({\n        topic: `factory/${m.location}/${m.machine_id}/energy`,\n        payload: JSON.stringify(payloadObj),\n        qos: 1,\n        retain: false\n    });\n\n    // InfluxDB Line Protocol Format\n    lpLines.push(`energy_raw,machine_id=${m.machine_id},location=${m.location} power_kw=${power_kw},energy_kwh=${energy_kwh},voltage_v=${voltage_v},current_a=${current_a},power_factor=${power_factor} ${timestampNs}`);\n});\n\n// Message 1 (output 1): For InfluxDB HTTP Request\nconst token = env.get(\"INFLUX_TOKEN\") || \"my-super-secret-admin-token-ChangeMe-12345\";\nconst dbName = env.get(\"INFLUX_DATABASE\") || \"energy_monitoring\";\n\nconst msgInflux = {\n    url: `http://influxdb:8181/api/v3/write_lp?db=${dbName}&precision=ns`,\n    headers: {\n        \"Authorization\": \"Token \" + token,\n        \"Content-Type\": \"text/plain; charset=utf-8\"\n    },\n    payload: lpLines.join(\"\\n\")\n};\n\n// Message 2 (output 2): For MQTT Publish (as array of messages)\nconst msgMqtt = [mqttMsgs]; \n\nreturn [msgInflux, msgMqtt];",
-        "outputs": 2,
-        "noerr": 0,
-        "initialize": "",
-        "finalize": "",
-        "libs": [],
-        "x": 310,
-        "y": 100,
-        "wires": [
-            [
-                "http-write-raw"
-            ],
-            [
-                "mqtt-out"
-            ]
-        ]
-    },
-    {
-        "id": "http-write-raw",
-        "type": "http request",
-        "z": "energy-monitor-tab",
-        "name": "POST Write Raw",
-        "method": "POST",
-        "ret": "txt",
-        "paytoqs": "ignore",
-        "url": "",
-        "tls": "",
-        "persist": false,
-        "proxy": "",
-        "authType": "",
-        "x": 540,
+        "id": "sim-cmt-1",
+        "type": "comment",
+        "z": "tab-simulator",
+        "name": "[1] Trigger setiap 10s — auto start saat deploy",
+        "info": "",
+        "x": 420,
         "y": 60,
+        "wires": []
+    },
+    {
+        "id": "sim-fn-gen",
+        "type": "function",
+        "z": "tab-simulator",
+        "name": "[2] Generate 5 Machine Telemetry",
+        "func": "// [2] Generate realistic 5-machine telemetry\nconst machines = [{\"id\": \"machine_01\", \"location\": \"produksi_a\", \"basePower\": 12, \"baseVoltage\": 220, \"baseCurrent\": 55}, {\"id\": \"machine_02\", \"location\": \"produksi_a\", \"basePower\": 10, \"baseVoltage\": 218, \"baseCurrent\": 46}, {\"id\": \"machine_03\", \"location\": \"produksi_b\", \"basePower\": 22, \"baseVoltage\": 221, \"baseCurrent\": 100}, {\"id\": \"machine_04\", \"location\": \"gudang\", \"basePower\": 4, \"baseVoltage\": 219, \"baseCurrent\": 18}, {\"id\": \"machine_05\", \"location\": \"office\", \"basePower\": 3, \"baseVoltage\": 220, \"baseCurrent\": 14}];\nconst vary  = (base, pct) => base * (1 + (Math.random() - 0.5) * 2 * pct);\nconst round = (v, d)      => Math.round(v * Math.pow(10, d)) / Math.pow(10, d);\nconst INTERVAL_SEC = 10;\nconst now = new Date().toISOString();\nmsg.payload = machines.map(m => {\n  const power   = round(vary(m.basePower,   0.2),  3);\n  const voltage = round(vary(m.baseVoltage, 0.02), 1);\n  const current = round(vary(m.baseCurrent, 0.15), 2);\n  const pf      = round(0.85 + Math.random() * 0.12, 3);\n  const energy  = round(power * INTERVAL_SEC / 3600, 6);\n  return { machine_id: m.id, location: m.location, timestamp: now,\n    power_kw: power, voltage_v: voltage, current_a: current,\n    energy_kwh: energy, power_factor: pf };\n});\nnode.status({ fill: 'green', shape: 'dot', text: 'x5 @ ' + now.substring(11,19) });\nreturn msg;",
+        "outputs": 1,
+        "x": 420,
+        "y": 180,
         "wires": [
             [
-                "debug-out"
+                "sim-split"
             ]
         ]
     },
     {
-        "id": "mqtt-out",
+        "id": "sim-cmt-2",
+        "type": "comment",
+        "z": "tab-simulator",
+        "name": "[2] Generate: 5 mesin, variasi acak ±20%",
+        "info": "",
+        "x": 660,
+        "y": 60,
+        "wires": []
+    },
+    {
+        "id": "sim-split",
+        "type": "split",
+        "z": "tab-simulator",
+        "name": "Split Array -> 5 Messages",
+        "splt": "\n",
+        "spltType": "str",
+        "arraySplt": 1,
+        "arraySpltType": "len",
+        "stream": false,
+        "addname": "",
+        "x": 660,
+        "y": 100,
+        "wires": [
+            [
+                "sim-fn-topic"
+            ]
+        ]
+    },
+    {
+        "id": "sim-fn-topic",
+        "type": "function",
+        "z": "tab-simulator",
+        "name": "[3] Set MQTT Topic per Machine",
+        "func": "msg.topic   = 'energy/' + msg.payload.machine_id + '/data';\nmsg.payload = JSON.stringify(msg.payload);\nreturn msg;",
+        "outputs": 1,
+        "x": 890,
+        "y": 220,
+        "wires": [
+            [
+                "sim-mqtt-out",
+                "c9a45b8a9e72ad19"
+            ]
+        ]
+    },
+    {
+        "id": "sim-cmt-3",
+        "type": "comment",
+        "z": "tab-simulator",
+        "name": "[3] Publish: energy/{machine_id}/data ke EMQX",
+        "info": "",
+        "x": 1100,
+        "y": 60,
+        "wires": []
+    },
+    {
+        "id": "sim-mqtt-out",
         "type": "mqtt out",
-        "z": "energy-monitor-tab",
-        "name": "EMQX Broker",
+        "z": "tab-simulator",
+        "name": "[3] Publish ke EMQX",
         "topic": "",
-        "qos": "1",
+        "qos": "0",
         "retain": "false",
         "respTopic": "",
         "contentType": "",
         "userProps": "",
         "correl": "",
         "expiry": "",
-        "broker": "emqx-broker-config",
-        "x": 540,
-        "y": 140,
+        "broker": "cfg-emqx",
+        "x": 1100,
+        "y": 100,
         "wires": []
     },
     {
-        "id": "debug-out",
+        "id": "c9a45b8a9e72ad19",
         "type": "debug",
-        "z": "energy-monitor-tab",
-        "name": "Write Status",
-        "active": false,
-        "tosidebar": true,
-        "console": false,
-        "tostatus": true,
-        "complete": "statusCode",
-        "targetType": "msg",
-        "statusVal": "payload",
-        "statusType": "auto",
-        "x": 730,
-        "y": 60,
-        "wires": []
-    },
-    {
-        "id": "minute-agg-trigger",
-        "type": "inject",
-        "z": "energy-monitor-tab",
-        "name": "Every 1m",
-        "props": [
-            {
-                "p": "payload"
-            },
-            {
-                "p": "topic",
-                "vt": "str"
-            }
-        ],
-        "repeat": "60",
-        "crontab": "",
-        "once": true,
-        "onceDelay": "5",
-        "topic": "",
-        "payload": "",
-        "payloadType": "date",
-        "x": 110,
-        "y": 240,
-        "wires": [
-            [
-                "minute-agg-query-prep"
-            ]
-        ]
-    },
-    {
-        "id": "minute-agg-query-prep",
-        "type": "function",
-        "z": "energy-monitor-tab",
-        "name": "Build SQL Query",
-        "func": "const token = env.get(\"INFLUX_TOKEN\") || \"my-super-secret-admin-token-ChangeMe-12345\";\nconst dbName = env.get(\"INFLUX_DATABASE\") || \"energy_monitoring\";\nconst offsetSec = parseInt(env.get(\"AGG_MINUTE_OFFSET_SEC\") || \"5\");\n\n// Checkpoint management\nconst nowSec = Math.floor(Date.now() / 1000) - offsetSec;\nconst lastSec = flow.get(\"last_minute_checkpoint\") || (nowSec - 120); // default to 2m ago\n\nif (nowSec <= lastSec) {\n    return null; // No new window\n}\n\n// Format timestamps to ISO-8601 for SQL queries\nconst fromStr = new Date(lastSec * 1000).toISOString();\nconst toStr = new Date(nowSec * 1000).toISOString();\n\n// Construct SQL Query\nconst sql = `\n    SELECT\n        DATE_BIN(INTERVAL '1 minute', time, TIMESTAMP '1970-01-01') AS bucket,\n        machine_id,\n        location,\n        AVG(power_kw)     AS avg_power_kw,\n        SUM(energy_kwh)   AS sum_energy_kwh,\n        AVG(voltage_v)    AS avg_voltage_v,\n        AVG(current_a)    AS avg_current_a,\n        AVG(power_factor) AS avg_power_factor,\n        MIN(power_kw)     AS min_power_kw,\n        MAX(power_kw)     AS max_power_kw\n    FROM energy_raw\n    WHERE time >= TIMESTAMP '${fromStr}'\n      AND time <  TIMESTAMP '${toStr}'\n    GROUP BY bucket, machine_id, location\n    ORDER BY bucket ASC\n`;\n\n// Save transient query end time for checkpoint update on success\nmsg.transient = {\n    nextCheckpoint: nowSec,\n    fromStr: fromStr,\n    toStr: toStr\n};\n\nmsg.url = \"http://influxdb:8181/api/v3/query\";\nmsg.headers = {\n    \"Authorization\": \"Token \" + token,\n    \"Content-Type\": \"application/json\",\n    \"Accept\": \"application/json\"\n};\nmsg.payload = {\n    \"query\": sql,\n    \"database\": dbName\n};\n\nreturn msg;",
-        "outputs": 1,
-        "noerr": 0,
-        "initialize": "",
-        "finalize": "",
-        "libs": [],
-        "x": 310,
-        "y": 240,
-        "wires": [
-            [
-                "minute-agg-query-http"
-            ]
-        ]
-    },
-    {
-        "id": "minute-agg-query-http",
-        "type": "http request",
-        "z": "energy-monitor-tab",
-        "name": "POST Query Raw",
-        "method": "POST",
-        "ret": "obj",
-        "paytoqs": "ignore",
-        "url": "",
-        "tls": "",
-        "persist": false,
-        "proxy": "",
-        "authType": "",
-        "x": 540,
-        "y": 240,
-        "wires": [
-            [
-                "minute-agg-format-lp"
-            ]
-        ]
-    },
-    {
-        "id": "minute-agg-format-lp",
-        "type": "function",
-        "z": "energy-monitor-tab",
-        "name": "Format to LP",
-        "func": "const token = env.get(\"INFLUX_TOKEN\") || \"my-super-secret-admin-token-ChangeMe-12345\";\n\nconst rows = msg.payload || [];\nif (rows.length === 0) {\n    // No new data, just advance checkpoint to avoid re-querying\n    flow.set(\"last_minute_checkpoint\", msg.transient.nextCheckpoint);\n    node.status({ fill: \"blue\", shape: \"ring\", text: \"No rows, advanced\" });\n    return null;\n}\n\nconst lpLines = [];\n\nrows.forEach(row => {\n    const bucketTime = row.bucket;\n    if (!bucketTime) return;\n    \n    const timestampNs = new Date(bucketTime).getTime() * 1000000;\n    \n    const fields = [\n        `avg_power_kw=${parseFloat(row.avg_power_kw || 0).toFixed(3)}`,\n        `sum_energy_kwh=${parseFloat(row.sum_energy_kwh || 0).toFixed(4)}`,\n        `avg_voltage_v=${parseFloat(row.avg_voltage_v || 0).toFixed(2)}`,\n        `avg_current_a=${parseFloat(row.avg_current_a || 0).toFixed(3)}`,\n        `avg_power_factor=${parseFloat(row.avg_power_factor || 0).toFixed(3)}`,\n        `min_power_kw=${parseFloat(row.min_power_kw || 0).toFixed(3)}`,\n        `max_power_kw=${parseFloat(row.max_power_kw || 0).toFixed(3)}`\n    ].join(\",\");\n    \n    lpLines.push(`energy_minute,machine_id=${row.machine_id},location=${row.location} ${fields} ${timestampNs}`);\n});\n\nmsg.url = `http://influxdb:8181/api/v3/write_lp?db=energy_minutes&precision=ns`;\nmsg.headers = {\n    \"Authorization\": \"Token \" + token,\n    \"Content-Type\": \"text/plain; charset=utf-8\"\n};\nmsg.payload = lpLines.join(\"\\n\");\n\nreturn msg;",
-        "outputs": 1,
-        "noerr": 0,
-        "initialize": "",
-        "finalize": "",
-        "libs": [],
-        "x": 750,
-        "y": 240,
-        "wires": [
-            [
-                "minute-agg-write-http"
-            ]
-        ]
-    },
-    {
-        "id": "minute-agg-write-http",
-        "type": "http request",
-        "z": "energy-monitor-tab",
-        "name": "POST Write Minute",
-        "method": "POST",
-        "ret": "txt",
-        "paytoqs": "ignore",
-        "url": "",
-        "tls": "",
-        "persist": false,
-        "proxy": "",
-        "authType": "",
-        "x": 960,
-        "y": 240,
-        "wires": [
-            [
-                "minute-agg-success-checkpoint"
-            ]
-        ]
-    },
-    {
-        "id": "minute-agg-success-checkpoint",
-        "type": "function",
-        "z": "energy-monitor-tab",
-        "name": "Update Checkpoint",
-        "func": "if (msg.statusCode === 204 || msg.statusCode === 200) {\n    flow.set(\"last_minute_checkpoint\", msg.transient.nextCheckpoint);\n    node.status({ fill: \"green\", shape: \"dot\", text: `Checkpointed ${msg.transient.nextCheckpoint}` });\n    node.log(`Minute aggregation success, checkpoint updated to: ${new Date(msg.transient.nextCheckpoint * 1000).toISOString()}`);\n} else {\n    node.status({ fill: \"red\", shape: \"dot\", text: \"Write failed\" });\n    node.error(\"Failed to write minute aggregates to InfluxDB. Status code: \" + msg.statusCode);\n}\nreturn null;",
-        "outputs": 1,
-        "noerr": 0,
-        "initialize": "",
-        "finalize": "",
-        "libs": [],
-        "x": 1180,
-        "y": 240,
-        "wires": [
-            []
-        ]
-    },
-    {
-        "id": "hour-agg-trigger",
-        "type": "inject",
-        "z": "energy-monitor-tab",
-        "name": "Every 1h",
-        "props": [
-            {
-                "p": "payload"
-            },
-            {
-                "p": "topic",
-                "vt": "str"
-            }
-        ],
-        "repeat": "3600",
-        "crontab": "",
-        "once": true,
-        "onceDelay": "15",
-        "topic": "",
-        "payload": "",
-        "payloadType": "date",
-        "x": 110,
-        "y": 380,
-        "wires": [
-            [
-                "hour-agg-query-prep"
-            ]
-        ]
-    },
-    {
-        "id": "hour-agg-query-prep",
-        "type": "function",
-        "z": "energy-monitor-tab",
-        "name": "Build SQL Query",
-        "func": "const token = env.get(\"INFLUX_TOKEN\") || \"my-super-secret-admin-token-ChangeMe-12345\";\nconst offsetSec = parseInt(env.get(\"AGG_HOUR_OFFSET_SEC\") || \"30\");\n\n// Checkpoint management\nconst nowSec = Math.floor(Date.now() / 1000) - offsetSec;\nconst lastSec = flow.get(\"last_hour_checkpoint\") || (nowSec - 7200); // default to 2h ago\n\nif (nowSec <= lastSec) {\n    return null; // No new window\n}\n\nconst fromStr = new Date(lastSec * 1000).toISOString();\nconst toStr = new Date(nowSec * 1000).toISOString();\n\n// Construct SQL Query on energy_minute in energy_minutes DB\nconst sql = `\n    SELECT\n        DATE_BIN(INTERVAL '1 hour', time, TIMESTAMP '1970-01-01') AS bucket,\n        machine_id,\n        location,\n        AVG(avg_power_kw)         AS avg_power_kw,\n        SUM(sum_energy_kwh)       AS sum_energy_kwh,\n        AVG(avg_voltage_v)        AS avg_voltage_v,\n        AVG(avg_current_a)        AS avg_current_a,\n        AVG(avg_power_factor)     AS avg_power_factor,\n        MIN(min_power_kw)         AS min_power_kw,\n        MAX(max_power_kw)         AS max_power_kw,\n        COUNT(*)                  AS sample_count\n    FROM energy_minute\n    WHERE time >= TIMESTAMP '${fromStr}'\n      AND time <  TIMESTAMP '${toStr}'\n    GROUP BY bucket, machine_id, location\n    ORDER BY bucket ASC\n`;\n\n// Save transient end time for checkpoint update on success\nmsg.transient = {\n    nextCheckpoint: nowSec,\n    fromStr: fromStr,\n    toStr: toStr\n};\n\nmsg.url = \"http://influxdb:8181/api/v3/query\";\nmsg.headers = {\n    \"Authorization\": \"Token \" + token,\n    \"Content-Type\": \"application/json\",\n    \"Accept\": \"application/json\"\n};\nmsg.payload = {\n    \"query\": sql,\n    \"database\": \"energy_minutes\"\n};\n\nreturn msg;",
-        "outputs": 1,
-        "noerr": 0,
-        "initialize": "",
-        "finalize": "",
-        "libs": [],
-        "x": 310,
-        "y": 380,
-        "wires": [
-            [
-                "hour-agg-query-http"
-            ]
-        ]
-    },
-    {
-        "id": "hour-agg-query-http",
-        "type": "http request",
-        "z": "energy-monitor-tab",
-        "name": "POST Query Minute",
-        "method": "POST",
-        "ret": "obj",
-        "paytoqs": "ignore",
-        "url": "",
-        "tls": "",
-        "persist": false,
-        "proxy": "",
-        "authType": "",
-        "x": 540,
-        "y": 380,
-        "wires": [
-            [
-                "hour-agg-format-lp",
-                "9351ed2510610666"
-            ]
-        ]
-    },
-    {
-        "id": "hour-agg-format-lp",
-        "type": "function",
-        "z": "energy-monitor-tab",
-        "name": "Format to LP",
-        "func": "const token = env.get(\"INFLUX_TOKEN\") || \"my-super-secret-admin-token-ChangeMe-12345\";\n\nconst rows = msg.payload || [];\nif (rows.length === 0) {\n    flow.set(\"last_hour_checkpoint\", msg.transient.nextCheckpoint);\n    node.status({ fill: \"blue\", shape: \"ring\", text: \"No rows, advanced\" });\n    return null;\n}\n\nconst lpLines = [];\n\nrows.forEach(row => {\n    const bucketTime = row.bucket;\n    if (!bucketTime) return;\n    \n    const timestampNs = new Date(bucketTime).getTime() * 1000000;\n    \n    const fields = [\n        `avg_power_kw=${parseFloat(row.avg_power_kw || 0).toFixed(3)}`,\n        `sum_energy_kwh=${parseFloat(row.sum_energy_kwh || 0).toFixed(4)}`,\n        `avg_voltage_v=${parseFloat(row.avg_voltage_v || 0).toFixed(2)}`,\n        `avg_current_a=${parseFloat(row.avg_current_a || 0).toFixed(3)}`,\n        `avg_power_factor=${parseFloat(row.avg_power_factor || 0).toFixed(3)}`,\n        `min_power_kw=${parseFloat(row.min_power_kw || 0).toFixed(3)}`,\n        `max_power_kw=${parseFloat(row.max_power_kw || 0).toFixed(3)}`,\n        `sample_count=${parseInt(row.sample_count || 0)}`\n    ].join(\",\");\n    \n    lpLines.push(`energy_hour,machine_id=${row.machine_id},location=${row.location} ${fields} ${timestampNs}`);\n});\n\nmsg.url = `http://influxdb:8181/api/v3/write_lp?db=energy_hour&precision=ns`;\nmsg.headers = {\n    \"Authorization\": \"Token \" + token,\n    \"Content-Type\": \"text/plain; charset=utf-8\"\n};\nmsg.payload = lpLines.join(\"\\n\");\n\nreturn msg;",
-        "outputs": 1,
-        "noerr": 0,
-        "initialize": "",
-        "finalize": "",
-        "libs": [],
-        "x": 750,
-        "y": 380,
-        "wires": [
-            [
-                "hour-agg-write-http"
-            ]
-        ]
-    },
-    {
-        "id": "hour-agg-write-http",
-        "type": "http request",
-        "z": "energy-monitor-tab",
-        "name": "POST Write Hour",
-        "method": "POST",
-        "ret": "txt",
-        "paytoqs": "ignore",
-        "url": "",
-        "tls": "",
-        "persist": false,
-        "proxy": "",
-        "authType": "",
-        "x": 960,
-        "y": 380,
-        "wires": [
-            [
-                "hour-agg-success-checkpoint"
-            ]
-        ]
-    },
-    {
-        "id": "hour-agg-success-checkpoint",
-        "type": "function",
-        "z": "energy-monitor-tab",
-        "name": "Update Checkpoint",
-        "func": "if (msg.statusCode === 204 || msg.statusCode === 200) {\n    flow.set(\"last_hour_checkpoint\", msg.transient.nextCheckpoint);\n    node.status({ fill: \"green\", shape: \"dot\", text: `Checkpointed ${msg.transient.nextCheckpoint}` });\n    node.log(`Hour aggregation success, checkpoint updated to: ${new Date(msg.transient.nextCheckpoint * 1000).toISOString()}`);\n} else {\n    node.status({ fill: \"red\", shape: \"dot\", text: \"Write failed\" });\n    node.error(\"Failed to write hour aggregates to InfluxDB. Status code: \" + msg.statusCode);\n}\nreturn null;",
-        "outputs": 1,
-        "noerr": 0,
-        "initialize": "",
-        "finalize": "",
-        "libs": [],
-        "x": 1180,
-        "y": 380,
-        "wires": [
-            []
-        ]
-    },
-    {
-        "id": "9351ed2510610666",
-        "type": "debug",
-        "z": "energy-monitor-tab",
+        "z": "tab-simulator",
         "name": "debug 1",
         "active": true,
         "tosidebar": true,
@@ -535,8 +607,424 @@
         "targetType": "full",
         "statusVal": "",
         "statusType": "auto",
-        "x": 690,
-        "y": 500,
+        "x": 1150,
+        "y": 220,
         "wires": []
+    },
+    {
+        "id": "ing-mqtt-in",
+        "type": "mqtt in",
+        "z": "tab-ingestion",
+        "name": "[1] Subscribe energy/+/data",
+        "topic": "energy/+/data",
+        "qos": "0",
+        "datatype": "auto",
+        "broker": "cfg-emqx",
+        "nl": false,
+        "rap": true,
+        "rh": 0,
+        "inputs": 0,
+        "x": 180,
+        "y": 100,
+        "wires": [
+            [
+                "ing-json"
+            ]
+        ]
+    },
+    {
+        "id": "ing-cmt-1",
+        "type": "comment",
+        "z": "tab-ingestion",
+        "name": "[1] Subscribe: energy/+/data — wildcard + = machine_id",
+        "info": "",
+        "x": 440,
+        "y": 60,
+        "wires": []
+    },
+    {
+        "id": "ing-json",
+        "type": "json",
+        "z": "tab-ingestion",
+        "name": "[2] Parse JSON",
+        "property": "payload",
+        "action": "obj",
+        "pretty": false,
+        "x": 440,
+        "y": 100,
+        "wires": [
+            [
+                "ing-fn-validate"
+            ]
+        ]
+    },
+    {
+        "id": "ing-cmt-2",
+        "type": "comment",
+        "z": "tab-ingestion",
+        "name": "[2] Parse JSON string -> object",
+        "info": "",
+        "x": 660,
+        "y": 60,
+        "wires": []
+    },
+    {
+        "id": "ing-fn-validate",
+        "type": "function",
+        "z": "tab-ingestion",
+        "name": "[3] Validate & Sanitize",
+        "func": "// [3] Validate: drop if missing/NaN field\nconst d = msg.payload;\nconst required = ['machine_id','location','power_kw','voltage_v','current_a','energy_kwh','power_factor'];\nfor (const f of required) {\n  if (d[f] === undefined || d[f] === null) {\n    node.warn('[ing] Dropped: missing ' + f);\n    node.status({ fill: 'red', shape: 'ring', text: 'Missing: ' + f });\n    return null;\n  }\n}\nfor (const f of ['power_kw','voltage_v','current_a','energy_kwh','power_factor']) {\n  const v = parseFloat(d[f]);\n  if (isNaN(v)) {\n    node.warn('[ing] Dropped: NaN in ' + f);\n    node.status({ fill: 'red', shape: 'ring', text: 'NaN: ' + f });\n    return null;\n  }\n  d[f] = v;\n}\nmsg.payload = d;\nreturn msg;",
+        "outputs": 1,
+        "x": 660,
+        "y": 100,
+        "wires": [
+            [
+                "ing-fn-lp"
+            ]
+        ]
+    },
+    {
+        "id": "ing-cmt-3",
+        "type": "comment",
+        "z": "tab-ingestion",
+        "name": "[3] Validate: semua field wajib + numerik",
+        "info": "",
+        "x": 880,
+        "y": 60,
+        "wires": []
+    },
+    {
+        "id": "ing-fn-lp",
+        "type": "function",
+        "z": "tab-ingestion",
+        "name": "[4] Build Line Protocol",
+        "func": "// [4] Build InfluxDB Line Protocol -> write to energy_monitoring\nconst d = msg.payload;\nconst esc = v => String(v).replace(/ /g,'\\\\ ').replace(/,/g,'\\\\,').replace(/=/g,'\\\\=');\nlet tsMs;\ntry { tsMs = d.timestamp ? new Date(d.timestamp).getTime() : Date.now(); if (isNaN(tsMs)) tsMs = Date.now(); }\ncatch(e) { tsMs = Date.now(); }\nconst tsNs = (tsMs * 1000000).toString();\nconst line = 'energy_raw,machine_id=' + esc(d.machine_id) + ',location=' + esc(d.location) +\n  ' power_kw=' + d.power_kw + ',voltage_v=' + d.voltage_v + ',current_a=' + d.current_a +\n  ',energy_kwh=' + d.energy_kwh + ',power_factor=' + d.power_factor + ' ' + tsNs;\nmsg.url     = 'http://influxdb:8181/api/v3/write_lp?db=energy_monitoring';\nmsg.method  = 'POST';\nmsg.headers = { 'Authorization': 'Bearer apiv3_ds_pESsacfI0_vXWdSHp49SZaXPbODKnd8gaSQopgUOV-ijAiLEeqLy3IiyXhp0bQtGmN1pHOHS83CJfKWqP7w', 'Content-Type': 'text/plain' };\nmsg.payload = line;\nreturn msg;",
+        "outputs": 1,
+        "x": 880,
+        "y": 100,
+        "wires": [
+            [
+                "ing-http"
+            ]
+        ]
+    },
+    {
+        "id": "ing-cmt-4",
+        "type": "comment",
+        "z": "tab-ingestion",
+        "name": "[4-5] POST /api/v3/write_lp?db=energy_monitoring",
+        "info": "",
+        "x": 1100,
+        "y": 60,
+        "wires": []
+    },
+    {
+        "id": "ing-http",
+        "type": "http request",
+        "z": "tab-ingestion",
+        "name": "[5] POST /api/v3/write_lp",
+        "method": "use",
+        "ret": "txt",
+        "paytoqs": "ignore",
+        "url": "",
+        "tls": "",
+        "persist": false,
+        "x": 1100,
+        "y": 100,
+        "wires": [
+            [
+                "ing-fn-check",
+                "ac24b7bcef26b918"
+            ]
+        ]
+    },
+    {
+        "id": "ing-fn-check",
+        "type": "function",
+        "z": "tab-ingestion",
+        "name": "[5] Check Status",
+        "func": "if (msg.statusCode === 200 || msg.statusCode === 204) {\n  node.status({ fill: 'green', shape: 'dot', text: 'OK @ ' + new Date().toISOString().substring(11,19) });\n} else {\n  node.status({ fill: 'red', shape: 'ring', text: 'Error ' + msg.statusCode });\n  node.warn('[ing] Write failed (' + msg.statusCode + '): ' + msg.payload);\n}\nreturn msg;",
+        "outputs": 1,
+        "x": 1100,
+        "y": 160,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "ing-catch",
+        "type": "catch",
+        "z": "tab-ingestion",
+        "name": "Error Handler",
+        "scope": null,
+        "uncaught": false,
+        "x": 180,
+        "y": 280,
+        "wires": [
+            [
+                "ing-debug-err"
+            ]
+        ]
+    },
+    {
+        "id": "ing-debug-err",
+        "type": "debug",
+        "z": "tab-ingestion",
+        "name": "Error Log",
+        "active": true,
+        "tosidebar": true,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "x": 400,
+        "y": 280,
+        "wires": []
+    },
+    {
+        "id": "ac24b7bcef26b918",
+        "type": "debug",
+        "z": "tab-ingestion",
+        "name": "debug 2",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 1390,
+        "y": 100,
+        "wires": []
+    },
+    {
+        "id": "dash-http-in",
+        "type": "http in",
+        "z": "tab-dashboard",
+        "name": "[1] GET /api/dashboard/energy",
+        "url": "/api/dashboard/energy",
+        "method": "get",
+        "upload": false,
+        "swaggerDoc": "",
+        "x": 200,
+        "y": 100,
+        "wires": [
+            [
+                "dash-fn-rt"
+            ]
+        ]
+    },
+    {
+        "id": "dash-cmt-1",
+        "type": "comment",
+        "z": "tab-dashboard",
+        "name": "[1] GET /api/dashboard/energy | Test: curl http://localhost:1880/api/dashboard/energy",
+        "info": "",
+        "x": 460,
+        "y": 60,
+        "wires": []
+    },
+    {
+        "id": "dash-fn-rt",
+        "type": "function",
+        "z": "tab-dashboard",
+        "name": "[2] Query Realtime (RAW DB)",
+        "func": "// [2] Query realtime: last 60s, all machines\nconst TOKEN = 'apiv3_ds_pESsacfI0_vXWdSHp49SZaXPbODKnd8gaSQopgUOV-ijAiLEeqLy3IiyXhp0bQtGmN1pHOHS83CJfKWqP7w', HOST = 'http://influxdb:8181';\nflow.set('dash_req', msg.req);\nflow.set('dash_res', msg.res);\nflow.set('dash_results', {});\nconst sql = `SELECT machine_id, location,\n  LAST(power_kw) AS power_kw, LAST(voltage_v) AS voltage_v,\n  LAST(current_a) AS current_a, LAST(power_factor) AS power_factor, MAX(time) AS last_seen\nFROM energy_raw\nWHERE time >= NOW() - INTERVAL '60 seconds'\nGROUP BY machine_id, location ORDER BY machine_id ASC`;\nmsg.url     = HOST + '/api/v3/query';\nmsg.method  = 'POST';\nmsg.headers = { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' };\nmsg.payload = JSON.stringify({ query: sql, database: 'energy_monitoring', format: 'json' });\nreturn msg;",
+        "outputs": 1,
+        "x": 460,
+        "y": 100,
+        "wires": [
+            [
+                "dash-http-rt"
+            ]
+        ]
+    },
+    {
+        "id": "dash-http-rt",
+        "type": "http request",
+        "z": "tab-dashboard",
+        "name": "[2] POST /api/v3/query RAW",
+        "method": "use",
+        "ret": "obj",
+        "paytoqs": "ignore",
+        "url": "",
+        "tls": "",
+        "persist": false,
+        "x": 720,
+        "y": 100,
+        "wires": [
+            [
+                "dash-fn-parse-rt"
+            ]
+        ]
+    },
+    {
+        "id": "dash-fn-parse-rt",
+        "type": "function",
+        "z": "tab-dashboard",
+        "name": "[2] Format Realtime",
+        "func": "try {\n  const rows = Array.isArray(msg.payload) ? msg.payload : [];\n  const machines = rows.map(r => ({\n    machine_id: r.machine_id, location: r.location,\n    power_kw: parseFloat(r.power_kw)||0, voltage_v: parseFloat(r.voltage_v)||0,\n    current_a: parseFloat(r.current_a)||0, power_factor: parseFloat(r.power_factor)||0,\n    last_seen: r.last_seen\n  }));\n  const results = flow.get('dash_results') || {};\n  results.realtime = {\n    total_power_kw: Math.round(machines.reduce((s,m)=>s+m.power_kw,0)*100)/100,\n    machines\n  };\n  flow.set('dash_results', results);\n} catch(e) { node.warn('[dash] realtime: ' + e.message); }\nreturn msg;",
+        "outputs": 1,
+        "x": 960,
+        "y": 100,
+        "wires": [
+            [
+                "dash-fn-hourly"
+            ]
+        ]
+    },
+    {
+        "id": "dash-fn-hourly",
+        "type": "function",
+        "z": "tab-dashboard",
+        "name": "[3] Query Hourly Trend (HOURLY DB)",
+        "func": "// [3] Query hourly trend from energy_hour\nconst TOKEN = 'apiv3_ds_pESsacfI0_vXWdSHp49SZaXPbODKnd8gaSQopgUOV-ijAiLEeqLy3IiyXhp0bQtGmN1pHOHS83CJfKWqP7w', HOST = 'http://influxdb:8181';\nconst sql = `SELECT DATE_BIN(INTERVAL '1 hour', time, TIMESTAMP '1970-01-01') AS hour_bucket,\n  machine_id, SUM(sum_energy_kwh) AS energy_kwh\nFROM energy_hour\nWHERE time >= DATE_TRUNC('day', NOW()) AND time < DATE_TRUNC('day', NOW()) + INTERVAL '1 day'\nGROUP BY hour_bucket, machine_id ORDER BY hour_bucket ASC, machine_id ASC`;\nmsg.url     = HOST + '/api/v3/query';\nmsg.method  = 'POST';\nmsg.headers = { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' };\nmsg.payload = JSON.stringify({ query: sql, database: 'energy_hour', format: 'json' });\nreturn msg;",
+        "outputs": 1,
+        "x": 460,
+        "y": 200,
+        "wires": [
+            [
+                "dash-http-hourly"
+            ]
+        ]
+    },
+    {
+        "id": "dash-http-hourly",
+        "type": "http request",
+        "z": "tab-dashboard",
+        "name": "[3] POST /api/v3/query HOURLY",
+        "method": "use",
+        "ret": "obj",
+        "paytoqs": "ignore",
+        "url": "",
+        "tls": "",
+        "persist": false,
+        "x": 720,
+        "y": 200,
+        "wires": [
+            [
+                "dash-fn-parse-hourly"
+            ]
+        ]
+    },
+    {
+        "id": "dash-fn-parse-hourly",
+        "type": "function",
+        "z": "tab-dashboard",
+        "name": "[3] Format Line Chart",
+        "func": "try {\n  const rows = Array.isArray(msg.payload) ? msg.payload : [];\n  const machineMap = {}, hourSet = new Set();\n  rows.forEach(r => {\n    const h = new Date(r.hour_bucket).getUTCHours();\n    const label = String(h).padStart(2,'0') + ':00';\n    hourSet.add(label);\n    if (!machineMap[r.machine_id]) machineMap[r.machine_id] = {};\n    machineMap[r.machine_id][label] = Math.round(parseFloat(r.energy_kwh)*1000)/1000;\n  });\n  const labels = Array.from(hourSet).sort();\n  const datasets = Object.entries(machineMap).map(([m,d]) => ({ label:m, data:labels.map(h=>d[h]||0) }));\n  const results = flow.get('dash_results') || {};\n  results.line_chart = { title: 'Konsumsi Energi Per Jam', labels, datasets };\n  flow.set('dash_results', results);\n} catch(e) { node.warn('[dash] hourly: ' + e.message); }\nreturn msg;",
+        "outputs": 1,
+        "x": 960,
+        "y": 200,
+        "wires": [
+            [
+                "dash-fn-pie"
+            ]
+        ]
+    },
+    {
+        "id": "dash-fn-pie",
+        "type": "function",
+        "z": "tab-dashboard",
+        "name": "[4] Query Pie Chart (MINUTES DB)",
+        "func": "// [4] Query pie chart: total kWh per machine from energy_minutes\nconst TOKEN = 'apiv3_ds_pESsacfI0_vXWdSHp49SZaXPbODKnd8gaSQopgUOV-ijAiLEeqLy3IiyXhp0bQtGmN1pHOHS83CJfKWqP7w', HOST = 'http://influxdb:8181';\nconst sql = `SELECT machine_id, SUM(sum_energy_kwh) AS total_kwh\nFROM energy_minute\nWHERE time >= DATE_TRUNC('day', NOW()) AND time < NOW()\nGROUP BY machine_id ORDER BY total_kwh DESC`;\nmsg.url     = HOST + '/api/v3/query';\nmsg.method  = 'POST';\nmsg.headers = { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' };\nmsg.payload = JSON.stringify({ query: sql, database: 'energy_minutes', format: 'json' });\nreturn msg;",
+        "outputs": 1,
+        "x": 460,
+        "y": 300,
+        "wires": [
+            [
+                "dash-http-pie"
+            ]
+        ]
+    },
+    {
+        "id": "dash-http-pie",
+        "type": "http request",
+        "z": "tab-dashboard",
+        "name": "[4] POST /api/v3/query MINUTES",
+        "method": "use",
+        "ret": "obj",
+        "paytoqs": "ignore",
+        "url": "",
+        "tls": "",
+        "persist": false,
+        "x": 720,
+        "y": 300,
+        "wires": [
+            [
+                "dash-fn-parse-pie"
+            ]
+        ]
+    },
+    {
+        "id": "dash-fn-parse-pie",
+        "type": "function",
+        "z": "tab-dashboard",
+        "name": "[4] Format Pie Chart",
+        "func": "try {\n  const rows = Array.isArray(msg.payload) ? msg.payload : [];\n  const results = flow.get('dash_results') || {};\n  results.pie_chart = {\n    title: 'Distribusi Konsumsi Per Mesin — Hari Ini',\n    labels: rows.map(r=>r.machine_id),\n    values: rows.map(r=>Math.round(parseFloat(r.total_kwh)*1000)/1000),\n    unit: 'kWh'\n  };\n  flow.set('dash_results', results);\n} catch(e) { node.warn('[dash] pie: ' + e.message); }\nreturn msg;",
+        "outputs": 1,
+        "x": 960,
+        "y": 300,
+        "wires": [
+            [
+                "dash-fn-merge"
+            ]
+        ]
+    },
+    {
+        "id": "dash-fn-merge",
+        "type": "function",
+        "z": "tab-dashboard",
+        "name": "[5] Merge All -> JSON Response",
+        "func": "// [5] Merge results and return JSON API response\nconst results = flow.get('dash_results') || {};\nmsg.payload = {\n  generated_at: new Date().toISOString(),\n  realtime:   results.realtime   || { total_power_kw: 0, machines: [] },\n  line_chart: results.line_chart || { title: '', labels: [], datasets: [] },\n  pie_chart:  results.pie_chart  || { title: '', labels: [], values: [], unit: 'kWh' }\n};\nmsg.req = flow.get('dash_req');\nmsg.res = flow.get('dash_res');\nmsg.statusCode = 200;\nmsg.headers = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' };\nnode.status({ fill: 'green', shape: 'dot', text: 'Served @ ' + new Date().toISOString().substring(11,19) });\nreturn msg;",
+        "outputs": 1,
+        "x": 460,
+        "y": 420,
+        "wires": [
+            [
+                "dash-http-response"
+            ]
+        ]
+    },
+    {
+        "id": "dash-http-response",
+        "type": "http response",
+        "z": "tab-dashboard",
+        "name": "[5] JSON API Response",
+        "statusCode": "",
+        "headers": {},
+        "x": 720,
+        "y": 420,
+        "wires": []
+    },
+    {
+        "id": "dash-catch",
+        "type": "catch",
+        "z": "tab-dashboard",
+        "name": "Error Handler",
+        "scope": null,
+        "uncaught": false,
+        "x": 200,
+        "y": 520,
+        "wires": [
+            [
+                "dash-fn-err"
+            ]
+        ]
+    },
+    {
+        "id": "dash-fn-err",
+        "type": "function",
+        "z": "tab-dashboard",
+        "name": "Error -> 500 Response",
+        "func": "node.warn('[dash] Error: ' + msg.error.message);\nmsg.statusCode = 500;\nmsg.payload = JSON.stringify({ error: msg.error.message });\nmsg.headers = { 'Content-Type': 'application/json' };\nreturn msg;",
+        "outputs": 1,
+        "x": 460,
+        "y": 520,
+        "wires": [
+            [
+                "dash-http-response"
+            ]
+        ]
     }
 ]

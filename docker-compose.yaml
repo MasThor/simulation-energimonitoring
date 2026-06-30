@@ -85,6 +85,7 @@ services:
 
     volumes:
       - influxdb_data:/var/lib/influxdb3
+      - ./influxdb/plugins:/var/lib/influxdb3/plugins
 
     restart: unless-stopped
 
@@ -180,35 +181,32 @@ services:
         max-size: "50m"
         max-file: "3"
   # ----------------------------------------------------------
-  # Python Aggregator — Feature Engineering Service
-  # Role: Query raw → compute avg/sum/min/max → write minute/hour
-  # Runs scheduled jobs via APScheduler
+  # Python Aggregator — DISABLED
+  # Replaced by InfluxDB 3 Processing Engine (built-in Python VM)
+  # See: /influxdb/plugins/ for downsampler plugin files
+  # To re-enable: uncomment this block and comment out the
+  # Processing Engine triggers in InfluxDB
   # ----------------------------------------------------------
-  aggregator:
-    build:
-      context: ./aggregator
-      dockerfile: Dockerfile
-    container_name: energy_aggregator
-    environment:
-      # Redis
-      - REDIS_HOST=${REDIS_HOST:-redis}
-      - REDIS_PORT=${REDIS_PORT:-6379}
-      - REDIS_PASSWORD=${REDIS_PASSWORD:-redispass}
-      # InfluxDB
-      - INFLUX_HOST=${INFLUX_HOST:-http://influxdb:8181}
-      - INFLUX_TOKEN=${INFLUX_TOKEN:-my-super-secret-admin-token-12345}
-      - INFLUX_DATABASE=${INFLUX_DATABASE:-energy_monitoring}
-      # Retention
-      - RETENTION_RAW_DAYS=${RETENTION_RAW_DAYS:-14}
-      - RETENTION_MINUTE_DAYS=${RETENTION_MINUTE_DAYS:-30}
-      # Tuning
-      - AGG_MINUTE_OFFSET_SEC=${AGG_MINUTE_OFFSET_SEC:-5}
-      - AGG_HOUR_OFFSET_SEC=${AGG_HOUR_OFFSET_SEC:-30}
-      - TZ=Asia/Jakarta
-
-    restart: unless-stopped
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "50m"
-        max-file: "3"
+  # aggregator:
+  #   build:
+  #     context: ./aggregator
+  #     dockerfile: Dockerfile
+  #   container_name: energy_aggregator
+  #   environment:
+  #     - REDIS_HOST=${REDIS_HOST:-redis}
+  #     - REDIS_PORT=${REDIS_PORT:-6379}
+  #     - REDIS_PASSWORD=${REDIS_PASSWORD:-redispass}
+  #     - INFLUX_HOST=${INFLUX_HOST:-http://influxdb:8181}
+  #     - INFLUX_TOKEN=${INFLUX_TOKEN:-my-super-secret-admin-token-12345}
+  #     - INFLUX_DATABASE=${INFLUX_DATABASE:-energy_monitoring}
+  #     - RETENTION_RAW_DAYS=${RETENTION_RAW_DAYS:-14}
+  #     - RETENTION_MINUTE_DAYS=${RETENTION_MINUTE_DAYS:-30}
+  #     - AGG_MINUTE_OFFSET_SEC=${AGG_MINUTE_OFFSET_SEC:-5}
+  #     - AGG_HOUR_OFFSET_SEC=${AGG_HOUR_OFFSET_SEC:-30}
+  #     - TZ=Asia/Jakarta
+  #   restart: unless-stopped
+  #   logging:
+  #     driver: "json-file"
+  #     options:
+  #       max-size: "50m"
+  #       max-file: "3"
