@@ -1,0 +1,6 @@
+{
+  "DEFAULT_INFLUX_SERVER": "http://influxdb:8181",
+  "DEFAULT_INFLUX_DATABASE": "energy_monitoring",
+  "DEFAULT_API_TOKEN": "apiv3_9MlQmU6Dw_VeuV_twYxN7bEheUMZiNrDfn3_ZNhWKFo4Pb5FPFNZR7k19mekz7heT2m1P4l-fMpOI2kgoJ27NA",
+  "DEFAULT_SERVER_NAME": "Local InfluxDB v3 Core"
+}

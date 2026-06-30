@@ -1,0 +1,527 @@
+[
+    {
+        "id": "migration-tab",
+        "type": "tab",
+        "label": "Migration / Seeders",
+        "disabled": false,
+        "info": "Initializes and checks InfluxDB v3 databases/buckets."
+    },
+    {
+        "id": "energy-monitor-tab",
+        "type": "tab",
+        "label": "Energy Monitor",
+        "disabled": false,
+        "info": "Simulates energy raw data generation and handles aggregation (Raw -> Minute, Minute -> Hour)."
+    },
+    {
+        "id": "emqx-broker-config",
+        "type": "mqtt-broker",
+        "name": "EMQX Broker",
+        "broker": "emqx",
+        "port": "1883",
+        "clientid": "nodered-energy-publisher",
+        "autoConnect": true,
+        "usetls": false,
+        "protocolVersion": "5",
+        "keepalive": "60",
+        "cleansession": true,
+        "autoUnsubscribe": true,
+        "birthTopic": "",
+        "birthQos": "0",
+        "birthPayload": "",
+        "closeTopic": "",
+        "closeQos": "0",
+        "closePayload": "",
+        "willTopic": "",
+        "willQos": "0",
+        "willPayload": ""
+    },
+    {
+        "id": "db-init-trigger",
+        "type": "inject",
+        "z": "migration-tab",
+        "name": "Startup (1s delay)",
+        "props": [
+            {
+                "p": "payload"
+            },
+            {
+                "p": "topic",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": true,
+        "onceDelay": "1",
+        "topic": "",
+        "payload": "",
+        "payloadType": "date",
+        "x": 140,
+        "y": 120,
+        "wires": [
+            [
+                "db-check-prepare"
+            ]
+        ]
+    },
+    {
+        "id": "db-check-prepare",
+        "type": "function",
+        "z": "migration-tab",
+        "name": "Prepare Check DB",
+        "func": "const token = env.get(\"INFLUX_TOKEN\") || \"my-super-secret-admin-token-ChangeMe-12345\";\nconst rawDb = env.get(\"INFLUX_DATABASE\") || \"energy_monitoring\";\n\n// We want to verify and seed three databases:\nconst databases = [\n    { name: rawDb, retention: 0 },\n    { name: \"energy_minutes\", retention: 1209600 }, // 14 days in seconds\n    { name: \"energy_hour\", retention: 0 }           // permanent\n];\n\n// Send 3 separate messages to the next HTTP request node\nconst msgs = databases.map(db => {\n    return {\n        dbName: db.name,\n        retention: db.retention,\n        headers: {\n            \"Authorization\": \"Token \" + token\n        }\n    };\n});\n\nreturn [ msgs ];",
+        "outputs": 1,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 350,
+        "y": 120,
+        "wires": [
+            [
+                "db-check-http"
+            ]
+        ]
+    },
+    {
+        "id": "db-check-http",
+        "type": "http request",
+        "z": "migration-tab",
+        "name": "GET Buckets",
+        "method": "GET",
+        "ret": "obj",
+        "paytoqs": "ignore",
+        "url": "http://influxdb:8181/api/v2/buckets",
+        "tls": "",
+        "persist": false,
+        "proxy": "",
+        "insecureSkipVerify": false,
+        "authType": "",
+        "x": 550,
+        "y": 120,
+        "wires": [
+            [
+                "db-check-evaluate"
+            ]
+        ]
+    },
+    {
+        "id": "db-check-evaluate",
+        "type": "function",
+        "z": "migration-tab",
+        "name": "Evaluate & Create DB",
+        "func": "const token = env.get(\"INFLUX_TOKEN\") || \"my-super-secret-admin-token-ChangeMe-12345\";\n\nconst buckets = msg.payload.buckets || [];\nconst dbExists = buckets.some(b => b.name === msg.dbName);\n\nif (dbExists) {\n    node.status({ fill: \"green\", shape: \"dot\", text: `${msg.dbName} exists ✓` });\n    node.log(`Database '${msg.dbName}' already exists.`);\n    return null; // Stop this message\n}\n\nnode.status({ fill: \"yellow\", shape: \"ring\", text: `Creating ${msg.dbName}...` });\n\n// Prepare create request\nmsg.url = \"http://influxdb:8181/api/v2/buckets\";\nmsg.headers = {\n    \"Authorization\": \"Token \" + token,\n    \"Content-Type\": \"application/json\"\n};\nmsg.payload = {\n    \"name\": msg.dbName\n};\nif (msg.retention > 0) {\n    msg.payload.retentionRules = [\n        {\n            \"type\": \"expire\",\n            \"everySeconds\": msg.retention\n        }\n    ];\n} else {\n    msg.payload.retentionRules = [];\n}\nreturn msg;",
+        "outputs": 1,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 770,
+        "y": 120,
+        "wires": [
+            [
+                "db-create-http"
+            ]
+        ]
+    },
+    {
+        "id": "db-create-http",
+        "type": "http request",
+        "z": "migration-tab",
+        "name": "POST Create DB",
+        "method": "POST",
+        "ret": "txt",
+        "paytoqs": "ignore",
+        "url": "",
+        "tls": "",
+        "persist": false,
+        "proxy": "",
+        "insecureSkipVerify": false,
+        "authType": "",
+        "x": 980,
+        "y": 120,
+        "wires": [
+            [
+                "db-migration-debug"
+            ]
+        ]
+    },
+    {
+        "id": "db-migration-debug",
+        "type": "debug",
+        "z": "migration-tab",
+        "name": "Migration Debug",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 1180,
+        "y": 120,
+        "wires": []
+    },
+    {
+        "id": "inject-ticker",
+        "type": "inject",
+        "z": "energy-monitor-tab",
+        "name": "Every 10s",
+        "props": [
+            {
+                "p": "payload"
+            },
+            {
+                "p": "topic",
+                "vt": "str"
+            }
+        ],
+        "repeat": "10",
+        "crontab": "",
+        "once": true,
+        "onceDelay": 1,
+        "topic": "",
+        "payload": "",
+        "payloadType": "date",
+        "x": 110,
+        "y": 100,
+        "wires": [
+            [
+                "build-payload"
+            ]
+        ]
+    },
+    {
+        "id": "build-payload",
+        "type": "function",
+        "z": "energy-monitor-tab",
+        "name": "Build Energy & LP",
+        "func": "// Simulate energy data for multiple machines\nconst machines = [\n    { machine_id: 'machine_001', location: 'line_a' },\n    { machine_id: 'machine_002', location: 'line_a' },\n    { machine_id: 'machine_003', location: 'line_b' },\n];\n\nconst timestampNs = Date.now() * 1000000; // Nanosecond timestamp\nconst mqttMsgs = [];\nconst lpLines = [];\n\nmachines.forEach(m => {\n    const power_kw     = parseFloat((10 + Math.random() * 20).toFixed(3));\n    const energy_kwh   = parseFloat((context.get(m.machine_id + '_kwh') || 1000.0 + Math.random() * 0.03).toFixed(4));\n    const voltage_v    = parseFloat((219 + Math.random() * 3).toFixed(2));\n    const current_a    = parseFloat((power_kw * 1000 / (voltage_v * Math.sqrt(3)) ).toFixed(3));\n    const power_factor = parseFloat((0.92 + Math.random() * 0.06).toFixed(3));\n\n    // Accumulate energy (simulated meter reading)\n    context.set(m.machine_id + '_kwh', energy_kwh + power_kw / 360);\n\n    const payloadObj = {\n        machine_id:   m.machine_id,\n        location:     m.location,\n        timestamp:    Date.now(),\n        power_kw,\n        energy_kwh,\n        voltage_v,\n        current_a,\n        power_factor,\n    };\n\n    // MQTT Format\n    mqttMsgs.push({\n        topic: `factory/${m.location}/${m.machine_id}/energy`,\n        payload: JSON.stringify(payloadObj),\n        qos: 1,\n        retain: false\n    });\n\n    // InfluxDB Line Protocol Format\n    lpLines.push(`energy_raw,machine_id=${m.machine_id},location=${m.location} power_kw=${power_kw},energy_kwh=${energy_kwh},voltage_v=${voltage_v},current_a=${current_a},power_factor=${power_factor} ${timestampNs}`);\n});\n\n// Message 1 (output 1): For InfluxDB HTTP Request\nconst token = env.get(\"INFLUX_TOKEN\") || \"my-super-secret-admin-token-ChangeMe-12345\";\nconst dbName = env.get(\"INFLUX_DATABASE\") || \"energy_monitoring\";\n\nconst msgInflux = {\n    url: `http://influxdb:8181/api/v3/write_lp?db=${dbName}&precision=ns`,\n    headers: {\n        \"Authorization\": \"Token \" + token,\n        \"Content-Type\": \"text/plain; charset=utf-8\"\n    },\n    payload: lpLines.join(\"\\n\")\n};\n\n// Message 2 (output 2): For MQTT Publish (as array of messages)\nconst msgMqtt = [mqttMsgs]; \n\nreturn [msgInflux, msgMqtt];",
+        "outputs": 2,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 310,
+        "y": 100,
+        "wires": [
+            [
+                "http-write-raw"
+            ],
+            [
+                "mqtt-out"
+            ]
+        ]
+    },
+    {
+        "id": "http-write-raw",
+        "type": "http request",
+        "z": "energy-monitor-tab",
+        "name": "POST Write Raw",
+        "method": "POST",
+        "ret": "txt",
+        "paytoqs": "ignore",
+        "url": "",
+        "tls": "",
+        "persist": false,
+        "proxy": "",
+        "insecureSkipVerify": false,
+        "authType": "",
+        "x": 540,
+        "y": 60,
+        "wires": [
+            [
+                "debug-out"
+            ]
+        ]
+    },
+    {
+        "id": "mqtt-out",
+        "type": "mqtt out",
+        "z": "energy-monitor-tab",
+        "name": "EMQX Broker",
+        "topic": "",
+        "qos": "1",
+        "retain": "false",
+        "respTopic": "",
+        "contentType": "",
+        "userProps": "",
+        "correl": "",
+        "expiry": "",
+        "broker": "emqx-broker-config",
+        "x": 540,
+        "y": 140,
+        "wires": []
+    },
+    {
+        "id": "debug-out",
+        "type": "debug",
+        "z": "energy-monitor-tab",
+        "name": "Write Status",
+        "active": false,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": true,
+        "complete": "statusCode",
+        "targetType": "msg",
+        "statusVal": "payload",
+        "statusType": "auto",
+        "x": 730,
+        "y": 60,
+        "wires": []
+    },
+    {
+        "id": "minute-agg-trigger",
+        "type": "inject",
+        "z": "energy-monitor-tab",
+        "name": "Every 1m",
+        "props": [
+            {
+                "p": "payload"
+            },
+            {
+                "p": "topic",
+                "vt": "str"
+            }
+        ],
+        "repeat": "60",
+        "crontab": "",
+        "once": true,
+        "onceDelay": "5",
+        "topic": "",
+        "payload": "",
+        "payloadType": "date",
+        "x": 110,
+        "y": 240,
+        "wires": [
+            [
+                "minute-agg-query-prep"
+            ]
+        ]
+    },
+    {
+        "id": "minute-agg-query-prep",
+        "type": "function",
+        "z": "energy-monitor-tab",
+        "name": "Build SQL Query",
+        "func": "const token = env.get(\"INFLUX_TOKEN\") || \"my-super-secret-admin-token-ChangeMe-12345\";\nconst dbName = env.get(\"INFLUX_DATABASE\") || \"energy_monitoring\";\nconst offsetSec = parseInt(env.get(\"AGG_MINUTE_OFFSET_SEC\") || \"5\");\n\n// Checkpoint management\nconst nowSec = Math.floor(Date.now() / 1000) - offsetSec;\nconst lastSec = flow.get(\"last_minute_checkpoint\") || (nowSec - 120); // default to 2m ago\n\nif (nowSec <= lastSec) {\n    return null; // No new window\n}\n\n// Format timestamps to ISO-8601 for SQL queries\nconst fromStr = new Date(lastSec * 1000).toISOString();\nconst toStr = new Date(nowSec * 1000).toISOString();\n\n// Construct SQL Query\nconst sql = `\n    SELECT\n        DATE_BIN(INTERVAL '1 minute', time, TIMESTAMP '1970-01-01') AS bucket,\n        machine_id,\n        location,\n        AVG(power_kw)     AS avg_power_kw,\n        SUM(energy_kwh)   AS sum_energy_kwh,\n        AVG(voltage_v)    AS avg_voltage_v,\n        AVG(current_a)    AS avg_current_a,\n        AVG(power_factor) AS avg_power_factor,\n        MIN(power_kw)     AS min_power_kw,\n        MAX(power_kw)     AS max_power_kw\n    FROM energy_raw\n    WHERE time >= TIMESTAMP '${fromStr}'\n      AND time <  TIMESTAMP '${toStr}'\n    GROUP BY bucket, machine_id, location\n    ORDER BY bucket ASC\n`;\n\n// Save transient query end time for checkpoint update on success\nmsg.transient = {\n    nextCheckpoint: nowSec,\n    fromStr: fromStr,\n    toStr: toStr\n};\n\nmsg.url = \"http://influxdb:8181/api/v3/query\";\nmsg.headers = {\n    \"Authorization\": \"Token \" + token,\n    \"Content-Type\": \"application/json\",\n    \"Accept\": \"application/json\"\n};\nmsg.payload = {\n    \"query\": sql,\n    \"database\": dbName\n};\n\nreturn msg;",
+        "outputs": 1,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 310,
+        "y": 240,
+        "wires": [
+            [
+                "minute-agg-query-http"
+            ]
+        ]
+    },
+    {
+        "id": "minute-agg-query-http",
+        "type": "http request",
+        "z": "energy-monitor-tab",
+        "name": "POST Query Raw",
+        "method": "POST",
+        "ret": "obj",
+        "paytoqs": "ignore",
+        "url": "",
+        "tls": "",
+        "persist": false,
+        "proxy": "",
+        "insecureSkipVerify": false,
+        "authType": "",
+        "x": 540,
+        "y": 240,
+        "wires": [
+            [
+                "minute-agg-format-lp"
+            ]
+        ]
+    },
+    {
+        "id": "minute-agg-format-lp",
+        "type": "function",
+        "z": "energy-monitor-tab",
+        "name": "Format to LP",
+        "func": "const token = env.get(\"INFLUX_TOKEN\") || \"my-super-secret-admin-token-ChangeMe-12345\";\n\nconst rows = msg.payload || [];\nif (rows.length === 0) {\n    // No new data, just advance checkpoint to avoid re-querying\n    flow.set(\"last_minute_checkpoint\", msg.transient.nextCheckpoint);\n    node.status({ fill: \"blue\", shape: \"ring\", text: \"No rows, advanced\" });\n    return null;\n}\n\nconst lpLines = [];\n\nrows.forEach(row => {\n    const bucketTime = row.bucket;\n    if (!bucketTime) return;\n    \n    const timestampNs = new Date(bucketTime).getTime() * 1000000;\n    \n    const fields = [\n        `avg_power_kw=${parseFloat(row.avg_power_kw || 0).toFixed(3)}`,\n        `sum_energy_kwh=${parseFloat(row.sum_energy_kwh || 0).toFixed(4)}`,\n        `avg_voltage_v=${parseFloat(row.avg_voltage_v || 0).toFixed(2)}`,\n        `avg_current_a=${parseFloat(row.avg_current_a || 0).toFixed(3)}`,\n        `avg_power_factor=${parseFloat(row.avg_power_factor || 0).toFixed(3)}`,\n        `min_power_kw=${parseFloat(row.min_power_kw || 0).toFixed(3)}`,\n        `max_power_kw=${parseFloat(row.max_power_kw || 0).toFixed(3)}`\n    ].join(\",\");\n    \n    lpLines.push(`energy_minute,machine_id=${row.machine_id},location=${row.location} ${fields} ${timestampNs}`);\n});\n\nmsg.url = `http://influxdb:8181/api/v3/write_lp?db=energy_minutes&precision=ns`;\nmsg.headers = {\n    \"Authorization\": \"Token \" + token,\n    \"Content-Type\": \"text/plain; charset=utf-8\"\n};\nmsg.payload = lpLines.join(\"\\n\");\n\nreturn msg;",
+        "outputs": 1,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 750,
+        "y": 240,
+        "wires": [
+            [
+                "minute-agg-write-http"
+            ]
+        ]
+    },
+    {
+        "id": "minute-agg-write-http",
+        "type": "http request",
+        "z": "energy-monitor-tab",
+        "name": "POST Write Minute",
+        "method": "POST",
+        "ret": "txt",
+        "paytoqs": "ignore",
+        "url": "",
+        "tls": "",
+        "persist": false,
+        "proxy": "",
+        "insecureSkipVerify": false,
+        "authType": "",
+        "x": 960,
+        "y": 240,
+        "wires": [
+            [
+                "minute-agg-success-checkpoint"
+            ]
+        ]
+    },
+    {
+        "id": "minute-agg-success-checkpoint",
+        "type": "function",
+        "z": "energy-monitor-tab",
+        "name": "Update Checkpoint",
+        "func": "if (msg.statusCode === 204 || msg.statusCode === 200) {\n    flow.set(\"last_minute_checkpoint\", msg.transient.nextCheckpoint);\n    node.status({ fill: \"green\", shape: \"dot\", text: `Checkpointed ${msg.transient.nextCheckpoint}` });\n    node.log(`Minute aggregation success, checkpoint updated to: ${new Date(msg.transient.nextCheckpoint * 1000).toISOString()}`);\n} else {\n    node.status({ fill: \"red\", shape: \"dot\", text: \"Write failed\" });\n    node.error(\"Failed to write minute aggregates to InfluxDB. Status code: \" + msg.statusCode);\n}\nreturn null;",
+        "outputs": 1,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 1180,
+        "y": 240,
+        "wires": []
+    },
+    {
+        "id": "hour-agg-trigger",
+        "type": "inject",
+        "z": "energy-monitor-tab",
+        "name": "Every 1h",
+        "props": [
+            {
+                "p": "payload"
+            },
+            {
+                "p": "topic",
+                "vt": "str"
+            }
+        ],
+        "repeat": "3600",
+        "crontab": "",
+        "once": true,
+        "onceDelay": "15",
+        "topic": "",
+        "payload": "",
+        "payloadType": "date",
+        "x": 110,
+        "y": 380,
+        "wires": [
+            [
+                "hour-agg-query-prep"
+            ]
+        ]
+    },
+    {
+        "id": "hour-agg-query-prep",
+        "type": "function",
+        "z": "energy-monitor-tab",
+        "name": "Build SQL Query",
+        "func": "const token = env.get(\"INFLUX_TOKEN\") || \"my-super-secret-admin-token-ChangeMe-12345\";\nconst offsetSec = parseInt(env.get(\"AGG_HOUR_OFFSET_SEC\") || \"30\");\n\n// Checkpoint management\nconst nowSec = Math.floor(Date.now() / 1000) - offsetSec;\nconst lastSec = flow.get(\"last_hour_checkpoint\") || (nowSec - 7200); // default to 2h ago\n\nif (nowSec <= lastSec) {\n    return null; // No new window\n}\n\nconst fromStr = new Date(lastSec * 1000).toISOString();\nconst toStr = new Date(nowSec * 1000).toISOString();\n\n// Construct SQL Query on energy_minute in energy_minutes DB\nconst sql = `\n    SELECT\n        DATE_BIN(INTERVAL '1 hour', time, TIMESTAMP '1970-01-01') AS bucket,\n        machine_id,\n        location,\n        AVG(avg_power_kw)         AS avg_power_kw,\n        SUM(sum_energy_kwh)       AS sum_energy_kwh,\n        AVG(avg_voltage_v)        AS avg_voltage_v,\n        AVG(avg_current_a)        AS avg_current_a,\n        AVG(avg_power_factor)     AS avg_power_factor,\n        MIN(min_power_kw)         AS min_power_kw,\n        MAX(max_power_kw)         AS max_power_kw,\n        COUNT(*)                  AS sample_count\n    FROM energy_minute\n    WHERE time >= TIMESTAMP '${fromStr}'\n      AND time <  TIMESTAMP '${toStr}'\n    GROUP BY bucket, machine_id, location\n    ORDER BY bucket ASC\n`;\n\n// Save transient end time for checkpoint update on success\nmsg.transient = {\n    nextCheckpoint: nowSec,\n    fromStr: fromStr,\n    toStr: toStr\n};\n\nmsg.url = \"http://influxdb:8181/api/v3/query\";\nmsg.headers = {\n    \"Authorization\": \"Token \" + token,\n    \"Content-Type\": \"application/json\",\n    \"Accept\": \"application/json\"\n};\nmsg.payload = {\n    \"query\": sql,\n    \"database\": \"energy_minutes\"\n};\n\nreturn msg;",
+        "outputs": 1,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 310,
+        "y": 380,
+        "wires": [
+            [
+                "hour-agg-query-http"
+            ]
+        ]
+    },
+    {
+        "id": "hour-agg-query-http",
+        "type": "http request",
+        "z": "energy-monitor-tab",
+        "name": "POST Query Minute",
+        "method": "POST",
+        "ret": "obj",
+        "paytoqs": "ignore",
+        "url": "",
+        "tls": "",
+        "persist": false,
+        "proxy": "",
+        "insecureSkipVerify": false,
+        "authType": "",
+        "x": 540,
+        "y": 380,
+        "wires": [
+            [
+                "hour-agg-format-lp"
+            ]
+        ]
+    },
+    {
+        "id": "hour-agg-format-lp",
+        "type": "function",
+        "z": "energy-monitor-tab",
+        "name": "Format to LP",
+        "func": "const token = env.get(\"INFLUX_TOKEN\") || \"my-super-secret-admin-token-ChangeMe-12345\";\n\nconst rows = msg.payload || [];\nif (rows.length === 0) {\n    flow.set(\"last_hour_checkpoint\", msg.transient.nextCheckpoint);\n    node.status({ fill: \"blue\", shape: \"ring\", text: \"No rows, advanced\" });\n    return null;\n}\n\nconst lpLines = [];\n\nrows.forEach(row => {\n    const bucketTime = row.bucket;\n    if (!bucketTime) return;\n    \n    const timestampNs = new Date(bucketTime).getTime() * 1000000;\n    \n    const fields = [\n        `avg_power_kw=${parseFloat(row.avg_power_kw || 0).toFixed(3)}`,\n        `sum_energy_kwh=${parseFloat(row.sum_energy_kwh || 0).toFixed(4)}`,\n        `avg_voltage_v=${parseFloat(row.avg_voltage_v || 0).toFixed(2)}`,\n        `avg_current_a=${parseFloat(row.avg_current_a || 0).toFixed(3)}`,\n        `avg_power_factor=${parseFloat(row.avg_power_factor || 0).toFixed(3)}`,\n        `min_power_kw=${parseFloat(row.min_power_kw || 0).toFixed(3)}`,\n        `max_power_kw=${parseFloat(row.max_power_kw || 0).toFixed(3)}`,\n        `sample_count=${parseInt(row.sample_count || 0)}`\n    ].join(\",\");\n    \n    lpLines.push(`energy_hour,machine_id=${row.machine_id},location=${row.location} ${fields} ${timestampNs}`);\n});\n\nmsg.url = `http://influxdb:8181/api/v3/write_lp?db=energy_hour&precision=ns`;\nmsg.headers = {\n    \"Authorization\": \"Token \" + token,\n    \"Content-Type\": \"text/plain; charset=utf-8\"\n};\nmsg.payload = lpLines.join(\"\\n\");\n\nreturn msg;",
+        "outputs": 1,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 750,
+        "y": 380,
+        "wires": [
+            [
+                "hour-agg-write-http"
+            ]
+        ]
+    },
+    {
+        "id": "hour-agg-write-http",
+        "type": "http request",
+        "z": "energy-monitor-tab",
+        "name": "POST Write Hour",
+        "method": "POST",
+        "ret": "txt",
+        "paytoqs": "ignore",
+        "url": "",
+        "tls": "",
+        "persist": false,
+        "proxy": "",
+        "insecureSkipVerify": false,
+        "authType": "",
+        "x": 960,
+        "y": 380,
+        "wires": [
+            [
+                "hour-agg-success-checkpoint"
+            ]
+        ]
+    },
+    {
+        "id": "hour-agg-success-checkpoint",
+        "type": "function",
+        "z": "energy-monitor-tab",
+        "name": "Update Checkpoint",
+        "func": "if (msg.statusCode === 204 || msg.statusCode === 200) {\n    flow.set(\"last_hour_checkpoint\", msg.transient.nextCheckpoint);\n    node.status({ fill: \"green\", shape: \"dot\", text: `Checkpointed ${msg.transient.nextCheckpoint}` });\n    node.log(`Hour aggregation success, checkpoint updated to: ${new Date(msg.transient.nextCheckpoint * 1000).toISOString()}`);\n} else {\n    node.status({ fill: \"red\", shape: \"dot\", text: \"Write failed\" });\n    node.error(\"Failed to write hour aggregates to InfluxDB. Status code: \" + msg.statusCode);\n}\nreturn null;",
+        "outputs": 1,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 1180,
+        "y": 380,
+        "wires": []
+    }
+]
