@@ -1,0 +1,4 @@
+influxdb3-python>=0.7.0
+apscheduler>=3.10.4
+redis>=5.0.1
+python-dotenv>=1.0.0
